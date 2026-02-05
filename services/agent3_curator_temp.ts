@@ -114,15 +114,25 @@ export const runStylistScoringStep = async (
 
     if (styleAnalysis?.searchEnhancement) {
         scoringContext = `
-        **Scoring Method:** Semantic Style Matching (High Precision).
-        **Visual Anchors:** ${styleAnalysis.searchEnhancement.unifiedKeywords?.join(', ')}
-        **Tech Specs:** Compare against detailed analysis: ${JSON.stringify(styleAnalysis.searchEnhancement.byCategory || {})}
+        **Scoring Method:** Feature Bracket Scoring (OR Logic).
+        
+        **THE BRACKET (Acceptable Features):**
+        The user provided example photos. We extracted the following "Feature Bracket":
+        ${JSON.stringify(styleAnalysis.searchEnhancement.byCategory || {}, null, 2)}
+        
+        **SCORING RULES:**
+        1. **Accumulation:** The more features an item has from the Bracket, the HIGHER the score.
+        2. **OR Logic for Conflicts:** The Bracket may contain conflicting values (e.g. Sleeves: ["Long", "Short"]). 
+           - This means BOTH are acceptable. 
+           - If an item matches *either* "Long" OR "Short", it gets points.
+           - Do not penalize an item for having "Long" just because another example had "Short".
+        3. **Visual Anchors:** Boost score if item description matches: ${styleAnalysis.searchEnhancement.unifiedKeywords?.join(', ')}
         `;
     }
 
     const prompt = `
     **AGENT: Stylist Scorer**
-    **Goal:** Score validated items (0-100) based on style fit.
+    **Goal:** Score validated items (0-100) based on style fit against the Feature Bracket.
 
     **Context:**
     ${scoringContext}
@@ -132,9 +142,9 @@ export const runStylistScoringStep = async (
 
     **Your Task:**
     For EACH item, calculate a "visualMatchScore" (0-100).
-    - **90-100:** Perfect match to Visual Anchors/Keywords.
-    - **70-89:** Good match.
-    - **< 60:** Poor match (mismatched style, wrong color).
+    - **90-100:** Matches multiple features in the Bracket and fits the Vibe.
+    - **70-89:** Good match (matches at least one major feature like Silhouette or Color).
+    - **< 60:** Poor match (mismatched style, wrong color, no Bracket features found).
 
     **Output Schema (Strict JSON):**
     Return the SAME structure as input, but add "visualMatchScore" and "scoreReason" to each item.
@@ -142,7 +152,7 @@ export const runStylistScoringStep = async (
     {
         "scoredItems": {
             "category_name": [
-                 { ...item_fields, "visualMatchScore": 85, "scoreReason": "Matches 'Boho' vibe and 'Cream' color request." }
+                 { ...item_fields, "visualMatchScore": 85, "scoreReason": "High Score: Matches 'Boho' vibe and 'Long Sleeve' feature from bracket." }
             ]
         }
     }

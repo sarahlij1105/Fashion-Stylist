@@ -6,7 +6,7 @@ export enum AppStep {
   STYLE = 'STYLE',
   COLOR = 'COLOR',
   PRICE_RANGE = 'PRICE_RANGE',
-  DELIVERY = 'DELIVERY',
+  // DELIVERY step removed
   IDEAL_STYLE = 'IDEAL_STYLE',
   SEARCHING = 'SEARCHING',
   RESULTS = 'RESULTS',
@@ -33,8 +33,8 @@ export interface Preferences {
   colors: string;
   priceRange: string;
   location: string;
-  deadline: string;
-  ignoreShippingLogic: boolean; // Logic flag for Agents
+  // deadline removed
+  // ignoreShippingLogic removed
   itemType: string; // Comma separated if multiple
 }
 

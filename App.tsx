@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage } from './types';
 import { analyzeUserPhoto, searchAndRecommend } from './services/geminiService';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Truck, Calendar, Clock } from 'lucide-react';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus } from 'lucide-react';
 
 const DefaultProfile: UserProfile = {
   gender: 'Female',
@@ -19,8 +19,6 @@ const DefaultPreferences: Preferences = {
   colors: '',
   priceRange: '$50 - $200',
   location: 'New York, USA',
-  deadline: '',
-  ignoreShippingLogic: false,
   itemType: '',
 };
 
@@ -32,7 +30,6 @@ const WIZARD_STEPS = [
   AppStep.STYLE,
   AppStep.COLOR,
   AppStep.PRICE_RANGE,
-  AppStep.DELIVERY,
   AppStep.IDEAL_STYLE,
 ];
 
@@ -98,10 +95,6 @@ export default function App() {
   const [minPrice, setMinPrice] = useState(210);
   const [maxPrice, setMaxPrice] = useState(1000);
 
-  // Delivery State
-  const [deliveryOption, setDeliveryOption] = useState<'1_week' | '2_weeks' | 'specific' | 'no_rush'>('2_weeks');
-  const [specificDate, setSpecificDate] = useState<string>('');
-
   useEffect(() => {
     // Mount effect
     console.log("App mounted");
@@ -120,38 +113,6 @@ export default function App() {
       priceRange: `$${minPrice} - $${maxPrice}`
     }));
   }, [selectedItemTypes, customItemType, minPrice, maxPrice]);
-
-  // Update Delivery Logic Preferences
-  useEffect(() => {
-    const getFutureDate = (days: number) => {
-        const date = new Date();
-        date.setDate(date.getDate() + days);
-        return date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    };
-
-    let deadlineStr = '';
-    let ignoreLogic = false;
-
-    if (deliveryOption === '1_week') {
-        deadlineStr = getFutureDate(7);
-        ignoreLogic = false;
-    } else if (deliveryOption === '2_weeks') {
-        deadlineStr = getFutureDate(14);
-        ignoreLogic = false;
-    } else if (deliveryOption === 'specific') {
-        deadlineStr = specificDate ? new Date(specificDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
-        ignoreLogic = false;
-    } else if (deliveryOption === 'no_rush') {
-        deadlineStr = "No Rush (> 2 Weeks)";
-        ignoreLogic = true;
-    }
-
-    setPreferences(prev => ({
-        ...prev,
-        deadline: deadlineStr,
-        ignoreShippingLogic: ignoreLogic
-    }));
-  }, [deliveryOption, specificDate]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'userImageBase64') => {
     const file = e.target.files?.[0];
@@ -651,92 +612,7 @@ export default function App() {
     </div>
   );
 
-  const renderDelivery = () => {
-    return (
-      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-        <ProgressBar currentStep={step} />
-        <h1 className="text-2xl font-bold font-sans text-stone-900 mb-8">When do you need it?</h1>
-
-        <div className="space-y-4">
-           {/* Option 1: 1 Week */}
-           <button
-             onClick={() => setDeliveryOption('1_week')}
-             className={`w-full text-left p-5 rounded-xl border transition-all flex items-center gap-4 ${deliveryOption === '1_week' ? 'border-stone-900 bg-stone-50 ring-1 ring-stone-900' : 'border-stone-200 bg-white hover:border-stone-300'}`}
-           >
-             <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center shrink-0 text-stone-900">
-               <Truck size={20} />
-             </div>
-             <div>
-               <h4 className="font-bold text-stone-900">Within 1 Week</h4>
-               <p className="text-xs text-stone-500">Express shipping priority</p>
-             </div>
-           </button>
-
-           {/* Option 2: 2 Weeks */}
-           <button
-             onClick={() => setDeliveryOption('2_weeks')}
-             className={`w-full text-left p-5 rounded-xl border transition-all flex items-center gap-4 ${deliveryOption === '2_weeks' ? 'border-stone-900 bg-stone-50 ring-1 ring-stone-900' : 'border-stone-200 bg-white hover:border-stone-300'}`}
-           >
-             <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center shrink-0 text-stone-900">
-               <Calendar size={20} />
-             </div>
-             <div>
-               <h4 className="font-bold text-stone-900">Within 2 Weeks</h4>
-               <p className="text-xs text-stone-500">Standard shipping</p>
-             </div>
-           </button>
-
-           {/* Option 3: Specific Date */}
-           <button
-             onClick={() => setDeliveryOption('specific')}
-             className={`w-full text-left p-5 rounded-xl border transition-all flex flex-col gap-3 ${deliveryOption === 'specific' ? 'border-stone-900 bg-stone-50 ring-1 ring-stone-900' : 'border-stone-200 bg-white hover:border-stone-300'}`}
-           >
-             <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center shrink-0 text-stone-900">
-                    <Clock size={20} />
-                </div>
-                <div>
-                    <h4 className="font-bold text-stone-900">Specific Date</h4>
-                    <p className="text-xs text-stone-500">For a special event</p>
-                </div>
-             </div>
-             
-             {deliveryOption === 'specific' && (
-                <div className="w-full pt-2 animate-fade-in" onClick={(e) => e.stopPropagation()}>
-                    <input 
-                        type="date" 
-                        value={specificDate}
-                        onChange={(e) => setSpecificDate(e.target.value)}
-                        className="w-full p-3 border border-stone-300 rounded-lg text-sm outline-none focus:border-stone-900"
-                        min={new Date().toISOString().split('T')[0]}
-                    />
-                </div>
-             )}
-           </button>
-
-           {/* Option 4: No Rush */}
-           <button
-             onClick={() => setDeliveryOption('no_rush')}
-             className={`w-full text-left p-5 rounded-xl border transition-all flex items-center gap-4 ${deliveryOption === 'no_rush' ? 'border-stone-900 bg-stone-50 ring-1 ring-stone-900' : 'border-stone-200 bg-white hover:border-stone-300'}`}
-           >
-             <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center shrink-0 text-stone-400">
-               <Layers size={20} />
-             </div>
-             <div>
-               <h4 className="font-bold text-stone-900">No Rush</h4>
-               <p className="text-xs text-stone-500">Browsing & Inspiration (&gt; 2 Weeks)</p>
-             </div>
-           </button>
-        </div>
-
-        <NavigationButtons 
-            onContinue={nextStep} 
-            onBack={prevStep} 
-            disabled={deliveryOption === 'specific' && !specificDate}
-        />
-      </div>
-    );
-  };
+// Delivery render function removed
 
   const renderIdealStyle = () => {
     return (
@@ -903,9 +779,8 @@ export default function App() {
             {step === AppStep.OCCASION && renderOccasion()}
             {step === AppStep.STYLE && renderStyle()}
             {step === AppStep.COLOR && renderColor()}
-            {step === AppStep.PRICE_RANGE && renderPriceRange()}
-            {step === AppStep.DELIVERY && renderDelivery()}
-            {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
+    {step === AppStep.PRICE_RANGE && renderPriceRange()}
+    {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
             {(step === AppStep.SEARCHING || step === AppStep.RESULTS) && renderResults()}
         </main>
         

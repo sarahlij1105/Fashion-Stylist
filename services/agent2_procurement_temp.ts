@@ -33,26 +33,19 @@ export const runCategoryMicroAgent = async (
 ): Promise<{ category: string, items: any[], rawResponse: string, searchCriteria: string, initialCandidateCount: number }> => {
     
     // --- SETUP: EXTRACT STYLE INSIGHTS ---
-    let visualAnchors = "";
+    // User requested: Do NOT use Style Analysis for strict search filtering.
+    // We only use the broad 'vibe' keywords, not the specific visual anchors.
     let optimizationKeywords = "";
 
     if (styleAnalysis && styleAnalysis.searchEnhancement) {
         if (styleAnalysis.searchEnhancement.unifiedKeywords) {
             optimizationKeywords = styleAnalysis.searchEnhancement.unifiedKeywords.join(' ');
         }
-        if (styleAnalysis.searchEnhancement.byCategory) {
-            const analysisCatKey = Object.keys(styleAnalysis.searchEnhancement.byCategory).find(
-                k => k.toLowerCase().includes(category.toLowerCase()) || category.toLowerCase().includes(k.toLowerCase())
-            );
-            if (analysisCatKey) {
-                const data = styleAnalysis.searchEnhancement.byCategory[analysisCatKey];
-                const keywords = data.enhancedKeywords || data.visual_anchors || [];
-                if (keywords.length > 0) visualAnchors = keywords.join(' ');
-            }
-        }
     }
 
-    const searchContext = `${preferences.stylePreference} ${category} ${visualAnchors} ${optimizationKeywords}`.trim();
+    // BROADER SEARCH: Only use Style Preference + Category + Vibe Tags.
+    // Removed 'visualAnchors' to prevent over-filtering at the top of the funnel.
+    const searchContext = `${preferences.stylePreference} ${category} ${optimizationKeywords}`.trim();
     // Ensure "shopping" intent in query
     const query = `${searchContext} buy online -pinterest -lyst -polyvore`.trim();
 
