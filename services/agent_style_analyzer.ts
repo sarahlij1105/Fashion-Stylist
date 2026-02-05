@@ -3,7 +3,21 @@ import { UserProfile, Preferences, StyleAnalysisResult, FashionPurpose } from ".
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
 
 const API_KEY = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+// Safety check for API_KEY
+let ai: GoogleGenAI;
+try {
+    if (API_KEY) {
+        ai = new GoogleGenAI({ apiKey: API_KEY });
+    } else {
+        console.warn("GoogleGenAI initialized without API_KEY. Some features will fail.");
+        // Mock the client to prevent immediate crash, but calls will fail
+        ai = { models: { generateContent: async () => { throw new Error("API_KEY missing"); } } } as any;
+    }
+} catch (e) {
+    console.error("Failed to initialize GoogleGenAI client:", e);
+    ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
+}
+
 
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
   const matches = dataUrl.match(/^data:(.+);base64,(.+)$/);

@@ -7,7 +7,21 @@ import { runDirectorFinalVerdict } from "./postorchestrator_temp";
 import { cacheManager } from './cacheService';
 
 const API_KEY = process.env.API_KEY || '';
-// const ai = new GoogleGenAI({ apiKey: API_KEY }); // Unused in this file as agents manage their own calls
+// // Safety check for API_KEY
+let ai: GoogleGenAI;
+try {
+    if (API_KEY) {
+        ai = new GoogleGenAI({ apiKey: API_KEY });
+    } else {
+        console.warn("GoogleGenAI initialized without API_KEY. Some features will fail.");
+        // Mock the client to prevent immediate crash, but calls will fail
+        ai = { models: { generateContent: async () => { throw new Error("API_KEY missing"); } } } as any;
+    }
+} catch (e) {
+    console.error("Failed to initialize GoogleGenAI client:", e);
+    ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
+}
+ // Unused in this file as agents manage their own calls
 
 // Helper to extract mimeType and base64 data from a Data URL
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
