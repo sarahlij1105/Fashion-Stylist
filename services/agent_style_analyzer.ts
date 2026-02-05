@@ -1,22 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, Preferences, StyleAnalysisResult, FashionPurpose } from "../types";
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
+import { generateContentWithRetry } from "./geminiService";
 
-const API_KEY = process.env.API_KEY || '';
-// Safety check for API_KEY
-let ai: GoogleGenAI;
-try {
-    if (API_KEY) {
-        ai = new GoogleGenAI({ apiKey: API_KEY });
-    } else {
-        console.warn("GoogleGenAI initialized without API_KEY. Some features will fail.");
-        // Mock the client to prevent immediate crash, but calls will fail
-        ai = { models: { generateContent: async () => { throw new Error("API_KEY missing"); } } } as any;
-    }
-} catch (e) {
-    console.error("Failed to initialize GoogleGenAI client:", e);
-    ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
-}
+// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
 
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
@@ -151,18 +138,20 @@ export const runStyleExampleAnalyzer = async (
     \`\`\`
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          ...imageParts,
-          { text: prompt }
-        ]
-      },
-      config: {
-        responseMimeType: 'application/json'
+    const response = await generateContentWithRetry(
+      'gemini-3-flash-preview',
+      {
+        contents: {
+          parts: [
+            ...imageParts,
+            { text: prompt }
+          ]
+        },
+        config: {
+          responseMimeType: 'application/json'
+        }
       }
-    });
+    );
 
     let text = response.text || "{}";
     

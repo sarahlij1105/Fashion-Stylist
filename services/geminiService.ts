@@ -28,6 +28,34 @@ try {
     ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
 }
 
+/**
+ * Wrapper for Gemini API calls with exponential backoff retry.
+ * Handles 503 (Overloaded) and 429 (Rate Limit) errors.
+ */
+export const generateContentWithRetry = async (
+    model: string,
+    params: any,
+    retries = 3,
+    delay = 1000
+): Promise<any> => {
+    try {
+        return await ai.models.generateContent({
+            model,
+            ...params
+        });
+    } catch (error: any) {
+        const isTransient = error.status === 503 || error.code === 503 || 
+                           error.status === 429 || error.code === 429 ||
+                           (error.message && error.message.includes("overloaded"));
+        
+        if (isTransient && retries > 0) {
+            console.warn(`[Gemini] ${model} overloaded/rate-limited. Retrying in ${delay}ms... (${retries} left)`);
+            await new Promise(res => setTimeout(res, delay));
+            return generateContentWithRetry(model, params, retries - 1, delay * 2);
+        }
+        throw error;
+    }
+};
 
 // Helper to extract mimeType and base64 data from a Data URL
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
@@ -104,18 +132,20 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose)
     - If invalid file: Set \`status: "error"\`, \`errorMessage: "Invalid image format"\`
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { mimeType, data } },
-          { text: prompt }
-        ]
-      },
-      config: {
-        responseMimeType: 'application/json'
+    const response = await generateContentWithRetry(
+      'gemini-3-flash-preview',
+      {
+        contents: {
+          parts: [
+            { inlineData: { mimeType, data } },
+            { text: prompt }
+          ]
+        },
+        config: {
+          responseMimeType: 'application/json'
+        }
       }
-    });
+    );
 
     const text = response.text || "{}";
     let parsed;

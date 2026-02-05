@@ -1,22 +1,9 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, Preferences, StyleAnalysisResult } from "../types";
+import { generateContentWithRetry } from "./geminiService";
 
-const API_KEY = process.env.API_KEY || '';
-// Safety check for API_KEY
-let ai: GoogleGenAI;
-try {
-    if (API_KEY) {
-        ai = new GoogleGenAI({ apiKey: API_KEY });
-    } else {
-        console.warn("GoogleGenAI initialized without API_KEY. Some features will fail.");
-        // Mock the client to prevent immediate crash, but calls will fail
-        ai = { models: { generateContent: async () => { throw new Error("API_KEY missing"); } } } as any;
-    }
-} catch (e) {
-    console.error("Failed to initialize GoogleGenAI client:", e);
-    ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
-}
+// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
 
 /**
@@ -61,14 +48,16 @@ export const runCategoryMicroAgent = async (
         // This bypasses the need for GOOGLE_SEARCH_ENGINE_ID
         const searchPrompt = `Search for 10 shopping links for: ${query}`;
         
-        const searchResponse = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: { parts: [{ text: searchPrompt }] },
-            config: {
-                tools: [{ googleSearch: {} }],
-                // Note: Response might not be JSON, we rely on grounding metadata
+        const searchResponse = await generateContentWithRetry(
+            'gemini-3-flash-preview',
+            {
+                contents: { parts: [{ text: searchPrompt }] },
+                config: {
+                    tools: [{ googleSearch: {} }],
+                    // Note: Response might not be JSON, we rely on grounding metadata
+                }
             }
-        });
+        );
         
         // Extract URLs directly from Grounding Metadata
         // The API returns sources in `groundingChunks` or `groundingMetadata`
@@ -185,11 +174,13 @@ export const runCategoryMicroAgent = async (
                 }
                 `;
 
-                const analysisRes = await ai.models.generateContent({
-                    model: 'gemini-3-flash-preview',
-                    contents: { parts: [{ text: enrichmentPrompt }] },
-                    config: { responseMimeType: 'application/json' }
-                });
+                const analysisRes = await generateContentWithRetry(
+                    'gemini-3-flash-preview',
+                    {
+                        contents: { parts: [{ text: enrichmentPrompt }] },
+                        config: { responseMimeType: 'application/json' }
+                    }
+                );
 
                 const analysis = JSON.parse(analysisRes.text || "{}");
 

@@ -1,21 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { Preferences, StylistResponse } from "../types";
+import { generateContentWithRetry } from "./geminiService";
 
-const API_KEY = process.env.API_KEY || '';
-// Safety check for API_KEY
-let ai: GoogleGenAI;
-try {
-    if (API_KEY) {
-        ai = new GoogleGenAI({ apiKey: API_KEY });
-    } else {
-        console.warn("GoogleGenAI initialized without API_KEY. Some features will fail.");
-        // Mock the client to prevent immediate crash, but calls will fail
-        ai = { models: { generateContent: async () => { throw new Error("API_KEY missing"); } } } as any;
-    }
-} catch (e) {
-    console.error("Failed to initialize GoogleGenAI client:", e);
-    ai = { models: { generateContent: async () => { throw new Error("GoogleGenAI initialization failed"); } } } as any;
-}
+// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
 
 export const runDirectorFinalVerdict = async (
@@ -144,11 +131,13 @@ export const runDirectorFinalVerdict = async (
     **Always acknowledge stock verification completion**
     `;
 
-    const critique2Resp = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: { parts: [{ text: critique2Prompt }] },
-        config: { responseMimeType: 'application/json' }
-    });
+    const critique2Resp = await generateContentWithRetry(
+        'gemini-3-flash-preview',
+        {
+            contents: { parts: [{ text: critique2Prompt }] },
+            config: { responseMimeType: 'application/json' }
+        }
+    );
     
     // Parse the JSON critique and append nicely formatted text
     try {
