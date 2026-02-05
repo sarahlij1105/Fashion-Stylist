@@ -1,0 +1,85 @@
+export enum AppStep {
+  GOAL_SELECTION = 'GOAL_SELECTION',
+  UPLOAD_PHOTO = 'UPLOAD_PHOTO',
+  ITEM_TYPE = 'ITEM_TYPE',
+  OCCASION = 'OCCASION',
+  STYLE = 'STYLE',
+  COLOR = 'COLOR',
+  PRICE_RANGE = 'PRICE_RANGE',
+  DELIVERY = 'DELIVERY',
+  IDEAL_STYLE = 'IDEAL_STYLE',
+  SEARCHING = 'SEARCHING',
+  RESULTS = 'RESULTS',
+}
+
+export enum FashionPurpose {
+  MATCHING = 'Find Matching Components',
+  NEW_OUTFIT = 'Design a Whole New Outfit',
+}
+
+export interface UserProfile {
+  gender: string;
+  estimatedSize: string;
+  currentStyle: string;
+  keptItems?: string[]; // Inventory detected from photo for Path A
+  userImageBase64: string | null;
+  idealStyleImages: string[]; // Array of base64 images for Agent 1.5
+}
+
+export interface Preferences {
+  purpose: FashionPurpose;
+  occasion: string;
+  stylePreference: string;
+  colors: string;
+  priceRange: string;
+  location: string;
+  deadline: string;
+  ignoreShippingLogic: boolean; // Logic flag for Agents
+  itemType: string; // Comma separated if multiple
+}
+
+export interface OutfitComponent {
+  category: string; // e.g. "Top", "Bottom", "Shoes"
+  name: string;
+  brand: string;
+  price: string;
+  purchaseUrl: string;
+  validationNote?: string;
+  fallbackSearchUrl?: string;
+}
+
+export interface RecommendationItem {
+  // This now represents a full "Outfit" or "Look"
+  name: string; // e.g., "Look 1: The Urban Cowboy"
+  description: string; // Overall description of the look
+  totalPrice?: string;
+  components: OutfitComponent[]; // The individual items making up the look
+  
+  // Legacy/Fallback properties for backward compatibility or single-item flows
+  imageUrl?: string; 
+  reason?: string;
+}
+
+export interface StylistResponse {
+  recommendations: RecommendationItem[];
+  reflectionNotes: string; // The "Forensic Audit Log"
+}
+
+export interface ChatMessage {
+  role: 'user' | 'model';
+  content: string;
+  data?: StylistResponse;
+}
+
+export interface StyleAnalysisResult {
+  analysisStatus: string;
+  // Flexible types to accommodate the new complex schema
+  searchEnhancement?: any; 
+  scoringGuidance?: any;
+  visualEmbedding?: any;
+  categorySpecificAnalysis?: any;
+  userFacingMessage?: string;
+  // Legacy fallback
+  visualSimilarityRubric?: any;
+  curatorGuidance?: any;
+}

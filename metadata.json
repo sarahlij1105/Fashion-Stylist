@@ -1,0 +1,5 @@
+{
+  "name": "Agentic Personal Stylist",
+  "description": "A multimodal AI stylist that analyzes your photo, searches for real items, and self-reflects to provide high-end fashion recommendations.",
+  "requestFramePermissions": []
+}
