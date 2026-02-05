@@ -724,7 +724,7 @@ export default function App() {
              </div>
              <div>
                <h4 className="font-bold text-stone-900">No Rush</h4>
-               <p className="text-xs text-stone-500">Browsing & Inspiration (> 2 Weeks)</p>
+               <p className="text-xs text-stone-500">Browsing & Inspiration (&gt; 2 Weeks)</p>
              </div>
            </button>
         </div>
