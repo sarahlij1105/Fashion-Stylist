@@ -50,29 +50,58 @@ export const runCategoryMicroAgent = async (
     const query = `${searchContext} buy online -pinterest -lyst -polyvore`.trim();
 
     // ==========================================
-    // PHASE 1: DISCOVERY (via Backend API)
+    // PHASE 1: DISCOVERY (via Gemini Grounding)
     // ==========================================
-    console.log(`[${category}] Phase 1: Search via API... Query: ${query}`);
+    console.log(`[${category}] Phase 1: Search via Gemini Grounding... Query: ${query}`);
     
     let candidates: any[] = [];
     
     try {
-        // Use local proxy if in dev/prod environment
-        const apiPath = '/api/search'; 
+        // Use Gemini with Google Search Tool
+        // This bypasses the need for GOOGLE_SEARCH_ENGINE_ID
+        const searchPrompt = `Search for 10 shopping links for: ${query}`;
         
-        // We append "site:revolve.com OR site:nordstrom.com OR site:farfetch.com OR site:ssense.com" etc. could be done here
-        // But for now we rely on the generic query.
+        const searchResponse = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ text: searchPrompt }] },
+            config: {
+                tools: [{ googleSearch: {} }],
+                // Note: Response might not be JSON, we rely on grounding metadata
+            }
+        });
         
-        const response = await fetch(`${apiPath}?q=${encodeURIComponent(query)}`);
-        if (!response.ok) {
-            console.warn(`[${category}] Search API failed: ${response.status}`);
-             // If API fails (e.g. no keys), fall back to empty list, handled below
-        } else {
-             const data = await response.json();
-             candidates = data.items || [];
-        }
+        // Extract URLs directly from Grounding Metadata
+        // The API returns sources in `groundingChunks` or `groundingMetadata`
+        // Inspect strict structure from the SDK response
+        const groundingMetadata = searchResponse.candidates?.[0]?.groundingMetadata;
+        const chunks = groundingMetadata?.groundingChunks || [];
+        
+        // Map chunks to our item format
+        const rawCandidates = chunks
+            .map((c: any) => c.web)
+            .filter((web: any) => web && web.uri && web.title);
+
+        // Deduplicate and basic filter
+        const seenUrls = new Set();
+        candidates = rawCandidates.filter((item: any) => {
+            const url = item.uri;
+            if (seenUrls.has(url)) return false;
+            // Filter out obviously non-product pages
+           if (url.includes('google.com') || url.includes('search?') || url.includes('youtube.com')) return false;
+            
+            seenUrls.add(url);
+            return true;
+        }).map((item: any) => ({
+            name: item.title,
+            purchaseUrl: item.uri,
+            snippet: "Identified via Google Search Grounding", // Metadata often lacks snippets, we fetch content in Phase 2
+            source: "gemini_grounding"
+        }));
+
+        console.log(`[${category}] Grounding found ${candidates.length} unique candidates.`);
+
     } catch (e) {
-        console.error(`[${category}] Phase 1 API Call Failed`, e);
+        console.error(`[${category}] Phase 1 Grounding Failed`, e);
     }
 
     // Fallback: If no API keys or backend, candidates is empty. 
@@ -80,7 +109,7 @@ export const runCategoryMicroAgent = async (
     // We strictly use the API results now for safety.
 
     if (candidates.length === 0) {
-        console.warn(`[${category}] No results found via API.`);
+        console.warn(`[${category}] No results found via Grounding.`);
         return { category, items: [], rawResponse: "[]", searchCriteria: query, initialCandidateCount: 0 };
     }
 
@@ -208,6 +237,43 @@ export const runProcurementAgent = async (
     pathInstruction: string,
     styleAnalysis?: StyleAnalysisResult
 ): Promise<string> => {
-    // This is a compatibility shim, actual logic is in runCategoryMicroAgent
-    return "{}"; 
+    // 1. Identify categories to search
+    // Split by comma if multiple items selected
+    const categories = preferences.itemType.split(',').map(s => s.trim()).filter(Boolean);
+    
+    // Default to "Outfit" if empty
+    if (categories.length === 0) categories.push("Outfit");
+
+    console.log(`>> Procurement Agent: Searching for ${categories.length} categories: [${categories.join(', ')}]`);
+
+    const allResults: Record<string, any[]> = {};
+
+    // 2. Run Micro-Agent for each category in parallel
+    const promises = categories.map(async (category) => {
+        try {
+            const result = await runCategoryMicroAgent(
+                category,
+                profile,
+                preferences,
+                pathInstruction,
+                new Date().toISOString(),
+                styleAnalysis
+            );
+            allResults[category] = result.items;
+        } catch (e) {
+            console.error(`>> Procurement Agent: Failed for category '${category}'`, e);
+            allResults[category] = [];
+        }
+    });
+
+    await Promise.all(promises);
+
+    // 3. Aggregate Results
+    const report = {
+        foundItems: allResults,
+        status: "complete",
+        timestamp: new Date().toISOString()
+    };
+
+    return JSON.stringify(report);
 };

@@ -78,7 +78,7 @@ export class CacheManager {
       sortedData.style = data.preferences.stylePreference;
       sortedData.colors = data.preferences.colors.split(',').map(s => s.trim()).sort().join(',');
       sortedData.priceRange = data.preferences.priceRange;
-      sortedData.deadline = data.preferences.deadline;
+      // sortedData.deadline = data.preferences.deadline;
     } else {
       // Layer 2: Search criteria only (no user/photo)
       sortedData.itemType = data.preferences.itemType.split(',').map(s => s.trim()).sort().join(',');

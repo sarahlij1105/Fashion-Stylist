@@ -202,7 +202,7 @@ export default function App() {
       setStep(AppStep.RESULTS);
     } catch (e) {
       console.error(e);
-      alert("Something went wrong during the styling search.");
+      alert(`Something went wrong during the styling search. Error: ${e instanceof Error ? e.message : String(e)}`);
       setStep(AppStep.GOAL_SELECTION);
     } finally {
       setIsLoading(false);

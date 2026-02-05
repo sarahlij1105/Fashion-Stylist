@@ -71,7 +71,8 @@ export const searchAndRecommend = async (
         ? `**Path A (Inventory Mode):** The user is currently wearing: [${profile.keptItems?.join(', ') || 'Unknown'}]. Search for items: [${preferences.itemType}] that complement these.`
         : `**Path B (Mannequin Mode):** Ignore current clothes. Build a fresh look based on: ${preferences.itemType}.`;
 
-    console.log("--- STARTING MULTI-AGENT SESSION (TEMP) ---");
+    const startTime = Date.now();
+    console.log(`[${new Date().toISOString()}] --- STARTING MULTI-AGENT SESSION (TEMP) ---`);
 
     // 2. Run Procurement Agent (Check Layer 2 Cache first)
     let procurementReport = "";
@@ -88,29 +89,36 @@ export const searchAndRecommend = async (
         console.log(">> Cache Manager: HIT Layer 2 (Search Results). Skipping Procurement Agent.");
         procurementReport = cachedSearch + "\n\n[⚡ CACHE MANAGER: SEARCH HIT] Using cached search results.";
     } else {
+        const t2Start = Date.now();
         console.log(">> Agent 2 (Procurement): Searching (Cache Miss)...");
         procurementReport = await runProcurementAgent(profile, preferences, pathInstruction);
         // Save to Layer 2 Cache
         await cacheManager.setCache(searchKey, procurementReport);
-        console.log(">> Agent 2 Complete. Results cached.");
+        console.log(`>> Agent 2 Complete. Results cached. Duration: ${Date.now() - t2Start}ms`);
     }
 
     // 2.5 DIRECTOR'S PRE-AUDIT (Critique 1) - using new module
+    const tPreAuditStart = Date.now();
     const procurementCritique = await runDirectorPreAudit(profile, preferences, procurementReport);
-    console.log(">> Director's Guidance:", procurementCritique);
+    console.log(`>> Director's Guidance: [Retracted for brevity]. Duration: ${Date.now() - tPreAuditStart}ms`);
 
     // 3. Run Curator Agent (Agent 3)
+    const t3Start = Date.now();
     console.log(">> Agent 3 (Curator): Auditing...");
     const finalResponse = await runCuratorAgent(profile, preferences, procurementReport, procurementCritique, imageParts);
-    console.log(">> Agent 3 Complete.");
+    console.log(`>> Agent 3 Complete. Duration: ${Date.now() - t3Start}ms`);
 
     // 3.5 DIRECTOR'S FINAL VERDICT (Critique 2) - using new module
     // Passed the entire finalResponse to allow Director to see error flags and status
+    const tFinalAuditStart = Date.now();
     const finalVerdict = await runDirectorFinalVerdict(finalResponse, preferences);
+    console.log(`>> Director's Final Verdict Complete. Duration: ${Date.now() - tFinalAuditStart}ms`);
     finalResponse.reflectionNotes += finalVerdict;
 
     // Save final response to Layer 1 Cache
     await cacheManager.setCache(exactKey, finalResponse);
+    
+    console.log(`[${new Date().toISOString()}] --- SESSION COMPLETE. Total Duration: ${Date.now() - startTime}ms ---`);
 
     return finalResponse;
 
