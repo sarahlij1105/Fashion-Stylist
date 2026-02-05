@@ -574,11 +574,51 @@ export default function App() {
     );
   };
 
-  const renderPriceRange = () => (
+  const renderPriceRange = () => {
+    // Dual Range Slider Logic
+    const MIN_LIMIT = 0;
+    const MAX_LIMIT = 3000;
+    
+    // Percentage for track coloring
+    const minPercent = ((minPrice - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
+    const maxPercent = ((maxPrice - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
+
+    return (
     <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+        <style>{`
+          .slider-thumb::-webkit-slider-thumb {
+            pointer-events: auto;
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #1c1917; /* stone-900 */
+            border: 2px solid white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            cursor: pointer;
+            margin-top: -10px; /* Center thumb on track */
+          }
+          .slider-thumb::-moz-range-thumb {
+            pointer-events: auto;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #1c1917;
+            border: 2px solid white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            cursor: pointer;
+            border: none;
+          }
+          /* Remove default appearance */
+          input[type=range]::-webkit-slider-runnable-track {
+            -webkit-appearance: none;
+            height: 100%;
+          }
+        `}</style>
         <ProgressBar currentStep={step} />
         <h1 className="text-2xl font-bold font-sans text-stone-900 mb-8">User Budget</h1>
 
+        {/* Inputs Display */}
         <div className="flex items-center gap-4 mb-12">
            <div className="flex-1">
              <label className="block text-xs font-medium text-stone-500 mb-2">Minimum</label>
@@ -587,7 +627,10 @@ export default function App() {
                 <input 
                   type="number"
                   value={minPrice}
-                  onChange={(e) => setMinPrice(Number(e.target.value))}
+                  onChange={(e) => {
+                      const val = Math.min(Number(e.target.value), maxPrice - 10);
+                      setMinPrice(val);
+                  }}
                   className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
                 />
              </div>
@@ -600,17 +643,62 @@ export default function App() {
                 <input 
                   type="number"
                   value={maxPrice}
-                  onChange={(e) => setMaxPrice(Number(e.target.value))}
+                  onChange={(e) => {
+                      const val = Math.max(Number(e.target.value), minPrice + 10);
+                      setMaxPrice(val);
+                  }}
                   className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
                 />
              </div>
            </div>
         </div>
+
+        {/* Slider UI */}
+        <div className="relative w-full h-12 mb-8 select-none">
+            {/* Track Background */}
+            <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-stone-200 rounded-full overflow-hidden"></div>
+            
+            {/* Active Range Track */}
+            <div 
+                className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-stone-900 rounded-full pointer-events-none"
+                style={{ left: `${minPercent}%`, width: `${maxPercent - minPercent}%` }}
+            ></div>
+
+            {/* Range Inputs (Overlaid) */}
+            <input 
+                type="range"
+                min={MIN_LIMIT}
+                max={MAX_LIMIT}
+                step={10}
+                value={minPrice}
+                onChange={(e) => {
+                    const val = Math.min(Number(e.target.value), maxPrice - 50);
+                    setMinPrice(val);
+                }}
+                className="slider-thumb absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 appearance-none pointer-events-none z-20"
+                style={{ pointerEvents: 'none' }} // Ensure clicks pass through, thumbs handle pointer-events via CSS
+            />
+            <input 
+                type="range"
+                min={MIN_LIMIT}
+                max={MAX_LIMIT}
+                step={10}
+                value={maxPrice}
+                onChange={(e) => {
+                    const val = Math.max(Number(e.target.value), minPrice + 50);
+                    setMaxPrice(val);
+                }}
+                className="slider-thumb absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 appearance-none pointer-events-none z-20"
+                style={{ pointerEvents: 'none' }}
+            />
+        </div>
+
         <p className="text-center text-stone-500 text-sm">Selected range: ${minPrice} - ${maxPrice}</p>
 
         <NavigationButtons onContinue={nextStep} onBack={prevStep} />
     </div>
   );
+  };
 
 // Delivery render function removed
 
