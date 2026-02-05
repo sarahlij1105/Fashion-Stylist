@@ -37,7 +37,6 @@ export const runDirectorPreAudit = async (
     - User Request: "${preferences.stylePreference}" items for ${preferences.occasion}
     - **Categories Requested:** ${categories}
     - Budget: ${preferences.priceRange}
-    - Required Delivery: ${preferences.deadline}
     - User Size: ${profile.estimatedSize}
 
     **Input Data (Search Results in JSON):**

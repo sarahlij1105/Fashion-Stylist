@@ -43,7 +43,6 @@ export const runDirectorFinalVerdict = async (
     - User Budget: ${preferences.priceRange}
     - User Style Request: ${preferences.stylePreference}
     - **Categories Requested:** ${preferences.itemType}  // **NEW**
-    - Required Delivery: ${preferences.deadline}
 
     **Quality Checklist (Score each 0-10):**
 
@@ -87,11 +86,7 @@ export const runDirectorFinalVerdict = async (
     - Example: If user wants "tops, bottoms, shoes", check each recommendation has all 3
     - Score: [X/10] or N/A if single category
 
-    **7. Delivery Feasibility:**
-    - Can items realistically arrive by ${preferences.deadline}?
-    - Score: [X/10]
-
-    **NEW: 8. Error Handling (if status != "success"):** ✅
+    **NEW: 7. Error Handling (if status != "success"):** ✅
     - If status is "partial" or "insufficient_results":
       - Are explanations clear?
       - Are suggested actions helpful?
@@ -109,7 +104,6 @@ export const runDirectorFinalVerdict = async (
         "urlValidation": number,  // **NEW**
         "sizeAvailability": number,
         "multiCategoryCompleteness": number,  // **NEW**
-        "deliveryFeasibility": number,
         "errorHandling": number,  // **NEW**
         "overallScore": number  // Average of applicable scores
       },
