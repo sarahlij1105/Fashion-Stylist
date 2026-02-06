@@ -19,21 +19,33 @@ export const runCategoryMicroAgent = async (
     styleAnalysis?: StyleAnalysisResult
 ): Promise<{ category: string, items: any[], rawResponse: string, searchCriteria: string, initialCandidateCount: number }> => {
     
-    // --- SETUP: EXTRACT STYLE INSIGHTS ---
-    // User requested: Do NOT use Style Analysis for strict search filtering.
-    // We only use the broad 'vibe' keywords, not the specific visual anchors.
-    let optimizationKeywords = "";
+    // --- SETUP: EXTRACT SEARCH CRITERIA ---
+    // User requested: Strict Search Criteria = gender (implicit in category usually) + size + category + color + style.
+    // AND: Do NOT use the detailed 'vibe tags' for this strict search to avoid over-filtering.
+    
+    // 1. Base Search Context: Style + Category
+    let searchContext = `${preferences.stylePreference} ${category}`.trim();
 
-    if (styleAnalysis && styleAnalysis.searchEnhancement) {
-        if (styleAnalysis.searchEnhancement.unifiedKeywords) {
-            optimizationKeywords = styleAnalysis.searchEnhancement.unifiedKeywords.join(' ');
-        }
+    // 2. Add Colors if available (High priority filter)
+    // If style analysis provided specific colors for this category, use those.
+    // Otherwise fallback to general preference colors.
+    let searchColors = preferences.colors; 
+    if (styleAnalysis?.detectedColors && styleAnalysis.detectedColors.length > 0) {
+        // Use the detected colors from the Style Analyzer
+         searchColors = styleAnalysis.detectedColors.join(' or ');
+    }
+    
+    if (searchColors) {
+        searchContext = `${searchColors} ${searchContext}`;
     }
 
-    // BROADER SEARCH: Only use Style Preference + Category + Vibe Tags.
-    // Removed 'visualAnchors' to prevent over-filtering at the top of the funnel.
-    const searchContext = `${preferences.stylePreference} ${category} ${optimizationKeywords}`.trim();
-    // Ensure "shopping" intent in query
+    // 3. Add Gender/Size context (simplified for query string)
+    if (profile.gender) {
+        searchContext = `${profile.gender} ${searchContext}`;
+    }
+
+    // Ensure "shopping" intent in query and exclude known noise
+    // REMOVED 'optimizationKeywords' (vibe tags) from the strict search query.
     const query = `${searchContext} buy online -pinterest -lyst -polyvore`.trim();
 
     // ==========================================

@@ -183,7 +183,8 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose)
 export const searchAndRecommend = async (
   profile: UserProfile,
   preferences: Preferences,
-  additionalContext: string = ""
+  additionalContext: string = "",
+  providedStyleAnalysis?: StyleAnalysisResult
 ): Promise<StylistResponse> => {
   const startTimeTotal = performance.now();
   const timings: string[] = [];
@@ -200,7 +201,9 @@ export const searchAndRecommend = async (
     console.log(">> Agent 0: Cache Manager checking...");
     const startCache = performance.now();
     const photoHash = cacheManager.generateFastHash(profile.userImageBase64);
-    const exactKey = await cacheManager.generateCacheKey('exact', { preferences, profile, photoHash });
+    // Include provided analysis in cache key to ensure we don't return stale results if analysis changed
+    const analysisHash = providedStyleAnalysis ? JSON.stringify(providedStyleAnalysis).length : 0; 
+    const exactKey = await cacheManager.generateCacheKey('exact', { preferences, profile, photoHash, analysisHash });
     const cachedExact = await cacheManager.checkCache(exactKey);
     const endCache = performance.now();
     timings.push(`Agent 0 (Cache): ${(endCache - startCache).toFixed(0)}ms`);
@@ -223,11 +226,16 @@ export const searchAndRecommend = async (
     console.log("--- STARTING PARALLEL PIPELINES ---");
 
     // --- AGENT 1.5: Style Analyzer ---
-    let styleAnalysis: StyleAnalysisResult | undefined;
-    if (profile.idealStyleImages?.length > 0) {
+    // Use provided analysis if available (from Confirmation step), otherwise run it now if images exist
+    let styleAnalysis: StyleAnalysisResult | undefined = providedStyleAnalysis;
+    
+    if (!styleAnalysis && profile.idealStyleImages?.length > 0) {
+        console.log(">> Running Style Analyzer (Lazy Load)...");
         const startStyle = performance.now();
         styleAnalysis = await runStyleExampleAnalyzer(profile, preferences);
-        timings.push(`Agent 1.5 (Style): ${(performance.now() - startStyle).toFixed(0)}ms`);
+        timings.push(`Agent 1.5 (Style - Lazy): ${(performance.now() - startStyle).toFixed(0)}ms`);
+    } else if (styleAnalysis) {
+        timings.push(`Agent 1.5 (Style - Pre-Computed): 0ms`);
     }
 
     // --- PARALLEL PIPELINE ORCHESTRATION ---
@@ -237,34 +245,50 @@ export const searchAndRecommend = async (
     // We Map over categories and launch a self-contained "Micro-Pipeline" for each
     const pipelinePromises = categories.map(async (category) => {
         const catStart = performance.now();
+        const catTimings: string[] = [];
         
         // 1. Procurement (Micro-Agent)
-        // Returns { items: [], ... }
+        const t0 = performance.now();
         const procurementResult = await runCategoryMicroAgent(category, profile, preferences, pathInstruction, today, styleAnalysis);
+        const t1 = performance.now();
+        const procDuration = (t1 - t0).toFixed(0);
         
-        // Log detailed criteria
-        const criteriaLog = `[${category}] Criteria: "${procurementResult.searchCriteria}" | Found: ${procurementResult.initialCandidateCount} | Kept: ${procurementResult.items.length}`;
-        console.log(criteriaLog);
-        logMessages.push(criteriaLog);
+        const procLog = `[${category}] Procurement: Found ${procurementResult.initialCandidateCount} -> Kept ${procurementResult.items.length} (${procDuration}ms)`;
         
         // 2. Verification (Immediate Handoff)
-        // Pass items directly to verifier. Skipping holistic Director Pre-Audit for speed.
+        const t2 = performance.now();
         const verificationResult = await runVerificationStep(
-            { validatedItems: { [category]: procurementResult.items } }, // Wrap in expected schema
-            "None", // No Pre-Audit guidance for this fast path
+            { validatedItems: { [category]: procurementResult.items } }, 
+            "None", 
             preferences,
             profile
         );
+        const t3 = performance.now();
+        const verDuration = (t3 - t2).toFixed(0);
+        
+        const verItems = verificationResult.validatedItems?.[category] || [];
+        const verLog = `[${category}] Verification: Input ${procurementResult.items.length} -> Kept ${verItems.length} (${verDuration}ms)`;
 
         // 3. Scoring (Immediate Handoff)
+        const t4 = performance.now();
         const scoringResult = await runStylistScoringStep(verificationResult, preferences, styleAnalysis);
+        const t5 = performance.now();
+        const scoreDuration = (t5 - t4).toFixed(0);
+        
+        const scoredItems = scoringResult.scoredItems?.[category] || [];
+        const scoreLog = `[${category}] Scoring: Input ${verItems.length} -> Scored ${scoredItems.length} (${scoreDuration}ms)`;
         
         const catEnd = performance.now();
-        timings.push(`Pipeline (${category}): ${(catEnd - catStart).toFixed(0)}ms`);
+        const totalCatDuration = (catEnd - catStart).toFixed(0);
+        
+        // Collect detailed logs for this category
+        const logs = [procLog, verLog, scoreLog];
         
         return { 
             category, 
-            scoredItems: scoringResult.scoredItems?.[category] || [] 
+            scoredItems: scoredItems,
+            logs,
+            timing: `Pipeline (${category}): ${totalCatDuration}ms`
         };
     });
 
@@ -276,6 +300,8 @@ export const searchAndRecommend = async (
     let totalItemsFound = 0;
     
     pipelineResults.forEach(res => {
+        logMessages.push(...res.logs);
+        timings.push(res.timing);
         if (res.scoredItems.length > 0) {
             aggregatedScoredItems[res.category] = res.scoredItems;
             totalItemsFound += res.scoredItems.length;

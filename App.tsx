@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage } from './types';
+import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
 import { analyzeUserPhoto, searchAndRecommend } from './services/geminiService';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus } from 'lucide-react';
+import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle } from 'lucide-react';
 
 const DefaultProfile: UserProfile = {
   gender: 'Female',
@@ -26,11 +27,12 @@ const WIZARD_STEPS = [
   AppStep.GOAL_SELECTION,
   AppStep.UPLOAD_PHOTO,
   AppStep.ITEM_TYPE,
+  AppStep.IDEAL_STYLE, // Moved up
+  AppStep.CONFIRMATION, // Moved up
   AppStep.OCCASION,
   AppStep.STYLE,
   AppStep.COLOR,
   AppStep.PRICE_RANGE,
-  AppStep.IDEAL_STYLE,
 ];
 
 interface NavigationButtonsProps {
@@ -89,11 +91,12 @@ export default function App() {
   const [preferences, setPreferences] = useState<Preferences>(DefaultPreferences);
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [styleAnalysisResults, setStyleAnalysisResults] = useState<StyleAnalysisResult | null>(null);
 
   const [selectedItemTypes, setSelectedItemTypes] = useState<string[]>([]);
   const [customItemType, setCustomItemType] = useState<string>('');
-  const [minPrice, setMinPrice] = useState(210);
-  const [maxPrice, setMaxPrice] = useState(1000);
+  const [minPrice, setMinPrice] = useState<number | string>(210);
+  const [maxPrice, setMaxPrice] = useState<number | string>(1000);
 
   useEffect(() => {
     // Mount effect
@@ -192,7 +195,8 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      const result = await searchAndRecommend(profile, preferences, customPrompt);
+      // Pass the potentially edited analysis results to the pipeline
+      const result = await searchAndRecommend(profile, preferences, customPrompt, styleAnalysisResults || undefined);
       const newMsg: ChatMessage = {
         role: 'model',
         content: result.reflectionNotes,
@@ -209,16 +213,86 @@ export default function App() {
     }
   };
 
-  const nextStep = () => {
+  const nextStep = async () => {
     const currentIndex = WIZARD_STEPS.indexOf(step);
+    
+    // NEW: Intercept transition after IDEAL_STYLE to run Analyzer
+    if (step === AppStep.IDEAL_STYLE) {
+        if (profile.idealStyleImages.length > 0) {
+            setIsLoading(true);
+            try {
+                // Run Analysis
+                const result = await runStyleExampleAnalyzer(profile, preferences);
+                setStyleAnalysisResults(result);
+                
+                // If analysis successful, go to Confirmation
+                if (result.analysisStatus === 'success') {
+                    setStep(AppStep.CONFIRMATION);
+                } else {
+                    // Fallback if skipped or error
+                     setStep(AppStep.OCCASION);
+                }
+            } catch (e) {
+                console.error("Analyzer error", e);
+                // Proceed without analysis
+                setStep(AppStep.OCCASION);
+            } finally {
+                setIsLoading(false);
+            }
+            return;
+        } else {
+             // No images, skip Confirmation and go to Manual Path
+             setStep(AppStep.OCCASION);
+             return;
+        }
+    }
+
+    if (step === AppStep.CONFIRMATION) {
+       // Sync Confirmed Data to Preferences
+       if (styleAnalysisResults) {
+           const topStyle = styleAnalysisResults.suggestedStyles?.[0]?.name;
+           const confirmedColors = styleAnalysisResults.detectedColors?.join(', ');
+
+           setPreferences(prev => ({
+               ...prev,
+               // Use the confirmed style (fallback to empty if removed all)
+               stylePreference: topStyle || prev.stylePreference || "Custom", 
+               // Use confirmed colors
+               colors: confirmedColors || prev.colors || "Any",
+               // Auto-fill occasion since we skipped it (optional, maybe leave blank or infer)
+               occasion: prev.occasion || "General" 
+           }));
+       }
+       // Skip Occasion/Style/Color -> Jump to Price Range
+       setStep(AppStep.PRICE_RANGE);
+       return;
+    }
+
     if (currentIndex >= 0 && currentIndex < WIZARD_STEPS.length - 1) {
       setStep(WIZARD_STEPS[currentIndex + 1]);
-    } else if (step === AppStep.IDEAL_STYLE) {
+    } else if (step === AppStep.PRICE_RANGE) {
       handleSearch();
     }
   };
 
   const prevStep = () => {
+    // Custom Back Logic for Branching
+    if (step === AppStep.OCCASION) {
+        // Occasion comes after Ideal Style (Manual Path)
+        setStep(AppStep.IDEAL_STYLE);
+        return;
+    }
+
+    if (step === AppStep.PRICE_RANGE) {
+        // Price Range comes from EITHER Confirmation OR Color
+        if (styleAnalysisResults && profile.idealStyleImages.length > 0) {
+            setStep(AppStep.CONFIRMATION);
+        } else {
+            setStep(AppStep.COLOR);
+        }
+        return;
+    }
+
     const currentIndex = WIZARD_STEPS.indexOf(step);
     if (currentIndex > 0) {
       setStep(WIZARD_STEPS[currentIndex - 1]);
@@ -580,8 +654,12 @@ export default function App() {
     const MAX_LIMIT = 3000;
     
     // Percentage for track coloring
-    const minPercent = ((minPrice - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
-    const maxPercent = ((maxPrice - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
+    const minVal = minPrice === '' ? 0 : Number(minPrice);
+    const maxVal = maxPrice === '' ? 0 : Number(maxPrice);
+    
+    // Percentage for track coloring
+    const minPercent = ((minVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
+    const maxPercent = ((maxVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
 
     return (
     <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
@@ -628,8 +706,18 @@ export default function App() {
                   type="number"
                   value={minPrice}
                   onChange={(e) => {
-                      const val = Math.min(Number(e.target.value), maxPrice - 10);
-                      setMinPrice(val);
+                      const val = e.target.value;
+                      if (val === '') {
+                          setMinPrice('');
+                          return;
+                      }
+                      const numVal = Number(val);
+                      // Only clamp the upper bound against maxPrice - 10, but allow lower values
+                      // Don't Math.min immediately if user is typing a smaller number
+                      if (numVal > (typeof maxPrice === 'number' ? maxPrice : MAX_LIMIT) - 10) {
+                          return; // Prevent overlapping
+                      }
+                      setMinPrice(numVal);
                   }}
                   className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
                 />
@@ -644,8 +732,17 @@ export default function App() {
                   type="number"
                   value={maxPrice}
                   onChange={(e) => {
-                      const val = Math.max(Number(e.target.value), minPrice + 10);
-                      setMaxPrice(val);
+                      const val = e.target.value;
+                      if (val === '') {
+                          setMaxPrice('');
+                          return;
+                      }
+                      const numVal = Number(val);
+                       // Only clamp the lower bound against minPrice + 10
+                      if (numVal < (typeof minPrice === 'number' ? minPrice : MIN_LIMIT) + 10) {
+                          return; // Prevent overlapping
+                      }
+                      setMaxPrice(numVal);
                   }}
                   className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
                 />
@@ -670,9 +767,9 @@ export default function App() {
                 min={MIN_LIMIT}
                 max={MAX_LIMIT}
                 step={10}
-                value={minPrice}
+                value={minVal}
                 onChange={(e) => {
-                    const val = Math.min(Number(e.target.value), maxPrice - 50);
+                    const val = Math.min(Number(e.target.value), maxVal - 50);
                     setMinPrice(val);
                 }}
                 className="slider-thumb absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 appearance-none pointer-events-none z-20"
@@ -683,9 +780,9 @@ export default function App() {
                 min={MIN_LIMIT}
                 max={MAX_LIMIT}
                 step={10}
-                value={maxPrice}
+                value={maxVal}
                 onChange={(e) => {
-                    const val = Math.max(Number(e.target.value), minPrice + 50);
+                    const val = Math.max(Number(e.target.value), minVal + 50);
                     setMaxPrice(val);
                 }}
                 className="slider-thumb absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 appearance-none pointer-events-none z-20"
@@ -693,7 +790,7 @@ export default function App() {
             />
         </div>
 
-        <p className="text-center text-stone-500 text-sm">Selected range: ${minPrice} - ${maxPrice}</p>
+        <p className="text-center text-stone-500 text-sm">Selected range: ${minVal} - ${maxVal}</p>
 
         <NavigationButtons onContinue={nextStep} onBack={prevStep} />
     </div>
@@ -702,9 +799,132 @@ export default function App() {
 
 // Delivery render function removed
 
+  const renderConfirmation = () => {
+    if (!styleAnalysisResults) return null;
+
+    const styles = styleAnalysisResults.suggestedStyles || [];
+    const colors = styleAnalysisResults.detectedColors || [];
+    
+    // Helper to toggle a style selection (filter out if user rejects)
+    const toggleStyle = (id: number) => {
+        const current = styleAnalysisResults.suggestedStyles || [];
+        // If it's the only one, don't allow removing (or maybe clear logic?)
+        // For now, simple remove/add logic is tricky with complex objects in state without deep clone.
+        // We will just create a new array.
+        const exists = current.find(s => s.id === id);
+        if (exists) {
+            // Remove
+             setStyleAnalysisResults(prev => prev ? ({
+                 ...prev,
+                 suggestedStyles: prev.suggestedStyles?.filter(s => s.id !== id)
+             }) : null);
+        } else {
+            // Logic to add back is hard without source of truth. 
+            // We assume user only REMOVES incorrect suggestions here for simplicity.
+        }
+    };
+    
+    const removeColor = (colorToRemove: string) => {
+        setStyleAnalysisResults(prev => prev ? ({
+            ...prev,
+            detectedColors: prev.detectedColors?.filter(c => c !== colorToRemove)
+        }) : null);
+    };
+
+    const addColor = () => {
+        const newColor = prompt("Enter a color to add:");
+        if (newColor) {
+             setStyleAnalysisResults(prev => prev ? ({
+                ...prev,
+                detectedColors: [...(prev.detectedColors || []), newColor]
+            }) : null);
+        }
+    };
+
+    return (
+        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <ProgressBar currentStep={step} />
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Analysis Confirmation</h1>
+          <p className="text-stone-500 mb-6 text-sm">We detected these vibes from your photos. Confirm or edit to refine your search.</p>
+
+          <div className="space-y-6">
+             {/* STYLES SECTION */}
+             <div className="bg-stone-50 p-5 rounded-2xl border border-stone-200">
+                <h3 className="text-sm font-bold text-stone-900 mb-3 flex items-center gap-2">
+                    <Sparkles size={14} className="text-stone-500" /> Detected Aesthetics
+                </h3>
+                <div className="space-y-3">
+                    {styles.length > 0 ? styles.map((style) => (
+                        <div key={style.id} className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm relative group">
+                            <div className="pr-8">
+                                <h4 className="font-bold text-stone-900 text-sm">{style.name}</h4>
+                                <p className="text-xs text-stone-500 mt-1 line-clamp-2">{style.description}</p>
+                                <p className="text-[10px] text-stone-400 mt-2 italic border-t border-stone-100 pt-1">
+                                    Why: {style.matchReason}
+                                </p>
+                            </div>
+                            <button 
+                                onClick={() => toggleStyle(style.id)}
+                                className="absolute top-3 right-3 p-1.5 bg-stone-100 rounded-full text-stone-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+                                title="Remove this style"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )) : (
+                        <div className="text-center p-4 text-stone-400 text-xs italic">
+                            No specific style matched. We will use your general preferences.
+                        </div>
+                    )}
+                </div>
+             </div>
+
+             {/* COLORS SECTION */}
+             <div className="bg-stone-50 p-5 rounded-2xl border border-stone-200">
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-stone-900 flex items-center gap-2">
+                        <Layers size={14} className="text-stone-500" /> Detected Palette
+                    </h3>
+                    <button onClick={addColor} className="text-xs font-bold text-stone-500 hover:text-stone-900 bg-white px-2 py-1 rounded border border-stone-200">
+                        + Add
+                    </button>
+                </div>
+                
+                <div className="flex flex-wrap gap-2">
+                    {colors.map((color, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 bg-white pl-3 pr-2 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-stone-300" style={{backgroundColor: color.toLowerCase().replace(' ', '')}}></span>
+                            {color}
+                            <button onClick={() => removeColor(color)} className="ml-1 p-0.5 hover:bg-stone-100 rounded text-stone-400 hover:text-red-500">
+                                <X size={12} />
+                            </button>
+                        </div>
+                    ))}
+                    {colors.length === 0 && <span className="text-xs text-stone-400 italic">No specific colors detected.</span>}
+                </div>
+             </div>
+             
+             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
+                 <AlertCircle size={18} className="text-blue-600 shrink-0 mt-0.5" />
+                 <p className="text-xs text-blue-800 leading-relaxed">
+                     <span className="font-bold">Note:</span> These verified styles and colors will be used as the <strong>primary search filters</strong>. The structural details (sleeves, fabrics) identified in the background will be used to score the results.
+                 </p>
+             </div>
+          </div>
+
+          <NavigationButtons 
+            onContinue={nextStep} 
+            onBack={() => setStep(AppStep.IDEAL_STYLE)}
+            continueLabel="Confirm & Continue"
+          />
+        </div>
+    );
+  };
+
   const renderIdealStyle = () => {
     return (
         <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          {/* Custom Progress Bar for this Step if needed, or use default */}
           <ProgressBar currentStep={step} />
           <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Ideal Look Examples</h1>
           <p className="text-stone-500 mb-8 text-sm">Optional: Upload images of outfits you love to help us match the vibe.</p>
@@ -744,11 +964,17 @@ export default function App() {
                  <p className="text-xs text-stone-500 mt-1">If you upload examples, Agent 1.5 will analyze them for specific cuts, colors, and vibes to score search results.</p>
              </div>
           </div>
+          
+          <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 mb-4">
+              <p className="text-xs text-blue-800 text-center">
+                  <strong>Tip:</strong> Uploading photos lets you skip the manual style & color questions!
+              </p>
+          </div>
 
           <NavigationButtons 
             onContinue={nextStep} 
             onBack={prevStep} 
-            continueLabel={profile.idealStyleImages.length > 0 ? "Analyze & Search" : "Skip & Search"}
+            continueLabel={profile.idealStyleImages.length > 0 ? "Analyze & Auto-Fill" : "Skip & Configure Manually"}
           />
         </div>
     );
@@ -864,11 +1090,13 @@ export default function App() {
             {step === AppStep.GOAL_SELECTION && renderGoalSelection()}
             {step === AppStep.UPLOAD_PHOTO && renderUploadPhoto()}
             {step === AppStep.ITEM_TYPE && renderItemType()}
+            {/* New Order: Ideal Style -> Confirmation -> (Maybe Skip) -> Occasion... */}
+            {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
+            {step === AppStep.CONFIRMATION && renderConfirmation()}
             {step === AppStep.OCCASION && renderOccasion()}
             {step === AppStep.STYLE && renderStyle()}
             {step === AppStep.COLOR && renderColor()}
-    {step === AppStep.PRICE_RANGE && renderPriceRange()}
-    {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
+            {step === AppStep.PRICE_RANGE && renderPriceRange()}
             {(step === AppStep.SEARCHING || step === AppStep.RESULTS) && renderResults()}
         </main>
         

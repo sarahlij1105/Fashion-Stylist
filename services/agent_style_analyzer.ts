@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { UserProfile, Preferences, StyleAnalysisResult, FashionPurpose } from "../types";
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
+import { fashionStyleLibrary } from "./fashionStyleLibrary";
 import { generateContentWithRetry } from "./geminiService";
 
 // REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
@@ -63,6 +64,20 @@ export const runStyleExampleAnalyzer = async (
   try {
     const vocabulary = getContextualVocabulary(preferences.itemType);
     const vocabularyJson = JSON.stringify(vocabulary, null, 2);
+    
+    // Summarize Style Library to reduce token count (just names and IDs for initial match)
+    // The full definition is too large, so we provide a summary and ask LLM to map.
+    const styleLibrarySummary = fashionStyleLibrary.fashion_style_guide.styles.map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        key_elements: {
+            colors: s.elements.color_palette.approach || s.elements.color_palette.primary,
+            fabrics: s.elements.materials_and_fabrics.natural || s.elements.materials_and_fabrics.luxury,
+            prints: s.elements.patterns_and_prints.preferred || s.elements.patterns_and_prints.classic
+        }
+    }));
+    const styleLibraryJson = JSON.stringify(styleLibrarySummary, null, 2);
 
     // Convert all example images to inline parts
     const imageParts = profile.idealStyleImages.map(img => {
@@ -71,68 +86,60 @@ export const runStyleExampleAnalyzer = async (
     });
 
     const prompt = `
-    AGENT: Style Example Analyzer (Visual Attribute Extraction)
-    Trigger: User uploaded "ideal style example" images.
-    Runs: After Vision Analyst, before Procurement Specialist.
-
-    **Role:** You are an expert Fashion Taxonomist and Style Analyzer.
-    **Goal:** Extract specific visual attributes from user images to build a "Scoring Bracket".
+    AGENT: Style & Detail Analyzer
+    
+    **Role:** You are an expert Fashion Taxonomist.
+    **Task:** Analyze the user's uploaded "Ideal Style" images to extract structured data for a personal stylist app.
     
     **Input Context:**
-    - User Request: ${preferences.itemType}
+    - User Request (Target Items): ${preferences.itemType}
     - Example Images: [Attached Images]
-
-    **CRITICAL RULE: AGGREGATE, DON'T FILTER**
-    - You may see multiple images. 
-    - **Capture ALL distinct features** present across the images.
-    - If Image 1 has "Short Sleeves" and Image 2 has "Long Sleeves", record **BOTH** in the output array.
-    - Do not force a "common thread" if it excludes valid features from one of the examples.
-    - Treat these as "Acceptable Variants".
-
-    **STRICT VOCABULARY ENFORCEMENT:**
-    You have been provided with a specific "Fashion Vocabulary Database" for the requested categories.
-    **YOU MUST USE EXACT TERMS FROM THIS DATABASE** when describing attributes like necklines, sleeves, materials, patterns, etc.
-
-    **Vocabulary Database (Contextual Subset):**
-    \`\`\`json
-    ${vocabularyJson}
-    \`\`\`
-
-    **Your Tasks:**
-
-    **STEP 1: The "Bracket" Extraction (Structured Data)**
-    For every requested category, scan ALL examples and build a list of observed features.
-    Return attributes as ARRAYS of strings to accommodate multiple valid styles.
     
-    **STEP 2: Visual Anchors (Scoring Tags)**
-    Extract specific visual terms to be used for SCORING matches later.
+    **Reference Libraries:**
+    1. **Fashion Style Library (Vibes):** Use this to identify the *overall aesthetic*.
+    ${styleLibraryJson}
+    
+    2. **Fashion Vocabulary (Details):** Use this to identify *specific structural details* for the requested items.
+    ${vocabularyJson}
 
-    **Output Schema (Produce strictly valid JSON):**
+    **Your Instructions:**
+    
+    **STEP 1: Style Identification (OR Logic)**
+    - Look at ALL images. 
+    - Identify the **Top 1-3** styles from the provided 'Fashion Style Library' that best match the images.
+    - It is okay if different images match different styles (e.g., one image is 'Boho' and another is 'Minimalist'). 
+    - Return the ID, Name, and a short reason for each match.
+
+    **STEP 2: Color Detection**
+    - Extract the *dominant* colors of the *requested items* in the photos.
+    - Ignore background colors or colors of non-requested items.
+    - Return a simple list of color names (e.g., "Navy Blue", "Cream", "Burgundy").
+
+    **STEP 3: Structural Detail Extraction**
+    - For each requested category (e.g., "dresses", "shoes"), scan the images for matching terms in the 'Fashion Vocabulary'.
+    - Extract specific attributes like: necklines, sleeves, materials, patterns, heel_types, etc.
+    - **CRITICAL:** Only use terms that exist in the provided Vocabulary JSON.
+
+    **Output Schema (Strict JSON):**
     \`\`\`json
     {
       "analysis_status": "success",
-      "category_analysis": {
-        "tops": {
-          "detected_in_examples": true, 
-          "scoring_bracket": {
-            // ARRAYS of observed values.
-            "type": ["String (e.g. blouse)", "String (e.g. tank)"],
-            "neckline": ["String", "String"],
-            "sleeves": ["String", "String"],
-            "material": ["String", "String"],
-            "pattern": ["String"],
-            "detail": ["String"],
-            "dominant_colors": ["Hex or Color Name"]
-          },
-          "visual_anchors": [
-            "String (High-value feature 1)",
-            "String (High-value feature 2)"
-          ]
+      "suggested_styles": [
+        {
+          "id": number,
+          "name": "String (Exact match from Library)",
+          "description": "String (Copy from Library)",
+          "match_reason": "String (e.g. 'Image 1 features tiered skirts and earth tones.')"
         }
-      },
-      "search_optimization": {
-        "primary_search_string": "String (General style query)",
-        "vibe_tags": ["String", "String"]
+      ],
+      "detected_colors": ["String", "String"],
+      "detail_dataset": {
+        "category_name (e.g. tops)": {
+           "necklines": ["String"],
+           "sleeves": ["String"],
+           "materials": ["String"],
+           "patterns": ["String"]
+        }
       }
     }
     \`\`\`
@@ -174,17 +181,19 @@ export const runStyleExampleAnalyzer = async (
     // Map the LLM's new schema to the App's expected StyleAnalysisResult structure
     return {
         analysisStatus: parsed.analysis_status || 'success',
-        // Store the raw complex data in categorySpecificAnalysis
-        categorySpecificAnalysis: parsed.category_analysis,
-        // Map to searchEnhancement for Agent 2
+        
+        // NEW FIELDS FOR CONFIRMATION FLOW
+        suggestedStyles: parsed.suggested_styles,
+        detectedColors: parsed.detected_colors,
+        detailDataset: parsed.detail_dataset,
+
+        // Legacy/Fallback mapping for backward compatibility (Agent 2/3 might still look for this)
         searchEnhancement: {
-            unifiedKeywords: parsed.search_optimization?.vibe_tags,
-            // Pass the category analysis object directly, Agent 2 will parse keys dynamically
-            byCategory: parsed.category_analysis,
-            // Also store the primary string
-            searchQuerySuggestion: parsed.search_optimization?.primary_search_string
+            unifiedKeywords: parsed.suggested_styles?.map((s: any) => s.name),
+            byCategory: parsed.detail_dataset, 
+            searchQuerySuggestion: parsed.suggested_styles?.[0]?.name 
         },
-        userFacingMessage: `Analyzed style: ${parsed.search_optimization?.vibe_tags?.join(', ') || 'Custom Style'}`
+        userFacingMessage: `Analyzed style: ${parsed.suggested_styles?.map((s: any) => s.name).join(', ') || 'Custom Style'}`
     };
 
   } catch (error) {

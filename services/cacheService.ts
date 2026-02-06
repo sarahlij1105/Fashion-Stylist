@@ -62,6 +62,7 @@ export class CacheManager {
       profile?: UserProfile;
       styleAnalysis?: StyleAnalysisResult;
       photoHash?: string;
+      analysisHash?: number; // New field for analysis fingerprint
     }
   ): Promise<string> {
     // Sort keys deterministically
@@ -71,6 +72,7 @@ export class CacheManager {
       // Layer 1: Everything matters
       sortedData.userId = data.userId;
       sortedData.photoHash = data.photoHash;
+      sortedData.analysisHash = data.analysisHash; // Include analysis hash
       sortedData.gender = data.profile?.gender;
       sortedData.size = data.profile?.estimatedSize;
       sortedData.itemType = data.preferences.itemType.split(',').map(s => s.trim()).sort().join(',');

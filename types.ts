@@ -5,6 +5,7 @@ export enum AppStep {
   OCCASION = 'OCCASION',
   STYLE = 'STYLE',
   COLOR = 'COLOR',
+  CONFIRMATION = 'CONFIRMATION', // New step for verifying AI analysis
   PRICE_RANGE = 'PRICE_RANGE',
   // DELIVERY step removed
   IDEAL_STYLE = 'IDEAL_STYLE',
@@ -79,6 +80,15 @@ export interface StyleAnalysisResult {
   visualEmbedding?: any;
   categorySpecificAnalysis?: any;
   userFacingMessage?: string;
+  // New structured output for user confirmation flow
+  suggestedStyles?: {
+    id: number;
+    name: string;
+    description: string;
+    matchReason?: string;
+  }[];
+  detectedColors?: string[];
+  detailDataset?: any; // The structural vocabulary matches
   // Legacy fallback
   visualSimilarityRubric?: any;
   curatorGuidance?: any;

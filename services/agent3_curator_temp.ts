@@ -99,7 +99,33 @@ export const runStylistScoringStep = async (
     **Keywords:** ${preferences.stylePreference}, ${preferences.colors}, ${preferences.occasion}.
     `;
 
-    if (styleAnalysis?.searchEnhancement) {
+    // NEW: Holistic Vibe Dataset Scoring
+    if (styleAnalysis?.suggestedStyles || styleAnalysis?.detailDataset) {
+        
+        // Prepare the Vibe Dataset
+        const vibes = styleAnalysis.suggestedStyles?.map((s: any) => `${s.name} (${s.description})`).join(' OR ') || "Custom Style";
+        
+        // Prepare the Detail Dataset (Structural features)
+        const details = styleAnalysis.detailDataset ? JSON.stringify(styleAnalysis.detailDataset) : "No specific details.";
+
+        scoringContext = `
+        **Scoring Method:** Holistic Vibe & Detail Matching (OR Logic).
+        
+        **1. THE VIBE DATASET (General Aesthetic):**
+        The item should match ONE OF these styles:
+        ${vibes}
+
+        **2. THE DETAIL DATASET (Specific Features):**
+        The item should possess features found in this dataset for its category:
+        ${details}
+        
+        **SCORING RULES:**
+        1. **OR Logic is Key:** The user provided multiple examples. An item matches if it fits *ANY* of the suggested styles or *ANY* of the structural details.
+        2. **Do not penalize** an item for missing a feature if it matches a *different* valid feature from the dataset.
+        3. **Color Check:** If the item's color is explicitly listed in detected colors (${styleAnalysis.detectedColors?.join(', ')}), give a significant score boost.
+        `;
+    } else if (styleAnalysis?.searchEnhancement) {
+        // Fallback to old logic if new data structure is missing
         scoringContext = `
         **Scoring Method:** Feature Bracket Scoring (OR Logic).
         
