@@ -808,21 +808,20 @@ export default function App() {
     // Helper to toggle a style selection (filter out if user rejects)
     const toggleStyle = (id: number) => {
         const current = styleAnalysisResults.suggestedStyles || [];
-        // If it's the only one, don't allow removing (or maybe clear logic?)
-        // For now, simple remove/add logic is tricky with complex objects in state without deep clone.
-        // We will just create a new array.
         const exists = current.find(s => s.id === id);
         if (exists) {
-            // Remove
              setStyleAnalysisResults(prev => prev ? ({
                  ...prev,
                  suggestedStyles: prev.suggestedStyles?.filter(s => s.id !== id)
              }) : null);
-        } else {
-            // Logic to add back is hard without source of truth. 
-            // We assume user only REMOVES incorrect suggestions here for simplicity.
         }
     };
+    
+    // Manage colors per category if detailDataset exists, otherwise global
+    // But detectedColors is currently a flat list from Agent 1.5. 
+    // To support per-category, we need to restructure how we store/display them.
+    // For now, let's allow adding specific tags like "Top: Red". 
+    // OR BETTER: Just use the flat list but allow user to be specific in the text.
     
     const removeColor = (colorToRemove: string) => {
         setStyleAnalysisResults(prev => prev ? ({
@@ -832,7 +831,7 @@ export default function App() {
     };
 
     const addColor = () => {
-        const newColor = prompt("Enter a color to add:");
+        const newColor = prompt("Enter a color to add (e.g. 'Navy Blue' or 'Top: Red'):");
         if (newColor) {
              setStyleAnalysisResults(prev => prev ? ({
                 ...prev,
@@ -841,6 +840,14 @@ export default function App() {
         }
     };
 
+    // Split colors by category if possible, or just show flat list
+    // Since Agent 1.5 returns a flat list `detected_colors`, we'll stick to that for now 
+    // but visually group them if they have prefixes, or just keep simple.
+    // REQUEST: "add separate color confirmation box for each category"
+    // We need to infer categories from the user's selection `preferences.itemType`
+    
+    const categories = preferences.itemType.split(',').map(s => s.trim()).filter(Boolean);
+    
     return (
         <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
           <ProgressBar currentStep={step} />
@@ -879,29 +886,60 @@ export default function App() {
                 </div>
              </div>
 
-             {/* COLORS SECTION */}
+             {/* COLORS SECTION - PER CATEGORY */}
              <div className="bg-stone-50 p-5 rounded-2xl border border-stone-200">
                 <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-bold text-stone-900 flex items-center gap-2">
                         <Layers size={14} className="text-stone-500" /> Detected Palette
                     </h3>
-                    <button onClick={addColor} className="text-xs font-bold text-stone-500 hover:text-stone-900 bg-white px-2 py-1 rounded border border-stone-200">
-                        + Add
-                    </button>
                 </div>
                 
-                <div className="flex flex-wrap gap-2">
-                    {colors.map((color, idx) => (
-                        <div key={idx} className="flex items-center gap-1.5 bg-white pl-3 pr-2 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 shadow-sm">
-                            <span className="w-2 h-2 rounded-full bg-stone-300" style={{backgroundColor: color.toLowerCase().replace(' ', '')}}></span>
-                            {color}
-                            <button onClick={() => removeColor(color)} className="ml-1 p-0.5 hover:bg-stone-100 rounded text-stone-400 hover:text-red-500">
-                                <X size={12} />
+                {/* Global/General Colors (detected without category) */}
+                <div className="mb-4">
+                    <span className="text-xs font-bold text-stone-400 uppercase tracking-wide mb-2 block">General Palette</span>
+                    <div className="flex flex-wrap gap-2">
+                        {colors.filter(c => !c.includes(':')).map((color, idx) => (
+                            <div key={idx} className="flex items-center gap-1.5 bg-white pl-3 pr-2 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 shadow-sm">
+                                <span className="w-2 h-2 rounded-full bg-stone-300" style={{backgroundColor: color.toLowerCase().replace(' ', '')}}></span>
+                                {color}
+                                <button onClick={() => removeColor(color)} className="ml-1 p-0.5 hover:bg-stone-100 rounded text-stone-400 hover:text-red-500">
+                                    <X size={12} />
+                                </button>
+                            </div>
+                        ))}
+                        <button onClick={() => {
+                             const c = prompt("Add a general color:");
+                             if(c) setStyleAnalysisResults(prev => prev ? ({...prev, detectedColors: [...(prev.detectedColors||[]), c]}) : null);
+                        }} className="text-xs font-bold text-stone-400 hover:text-stone-600 bg-white px-2 py-1.5 rounded border border-stone-200 border-dashed">
+                            + Add
+                        </button>
+                    </div>
+                </div>
+
+                {/* Per-Category Color Overrides */}
+                {categories.map(cat => (
+                    <div key={cat} className="mb-4 last:mb-0 border-t border-stone-100 pt-3">
+                        <span className="text-xs font-bold text-stone-900 uppercase tracking-wide mb-2 block">{cat} Colors</span>
+                        <div className="flex flex-wrap gap-2">
+                             {/* Show colors specifically tagged with this category (e.g. "Dress: Red") */}
+                             {colors.filter(c => c.toLowerCase().startsWith(cat.toLowerCase() + ':')).map((color, idx) => (
+                                <div key={idx} className="flex items-center gap-1.5 bg-white pl-3 pr-2 py-1.5 rounded-lg border border-stone-200 text-xs font-medium text-stone-700 shadow-sm">
+                                    <span className="w-2 h-2 rounded-full bg-stone-300" style={{backgroundColor: color.split(':')[1].trim().toLowerCase()}}></span>
+                                    {color.split(':')[1].trim()}
+                                    <button onClick={() => removeColor(color)} className="ml-1 p-0.5 hover:bg-stone-100 rounded text-stone-400 hover:text-red-500">
+                                        <X size={12} />
+                                    </button>
+                                </div>
+                            ))}
+                            <button onClick={() => {
+                                 const c = prompt(`Add a color for ${cat}:`);
+                                 if(c) setStyleAnalysisResults(prev => prev ? ({...prev, detectedColors: [...(prev.detectedColors||[]), `${cat}: ${c}`]}) : null);
+                            }} className="text-xs font-bold text-stone-400 hover:text-stone-600 bg-white px-2 py-1.5 rounded border border-stone-200 border-dashed">
+                                + Add {cat} Color
                             </button>
                         </div>
-                    ))}
-                    {colors.length === 0 && <span className="text-xs text-stone-400 italic">No specific colors detected.</span>}
-                </div>
+                    </div>
+                ))}
              </div>
              
              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
@@ -971,11 +1009,31 @@ export default function App() {
               </p>
           </div>
 
-          <NavigationButtons 
-            onContinue={nextStep} 
-            onBack={prevStep} 
-            continueLabel={profile.idealStyleImages.length > 0 ? "Analyze & Auto-Fill" : "Skip & Configure Manually"}
-          />
+          <div className="flex flex-col gap-3">
+              <button 
+                onClick={nextStep}
+                disabled={profile.idealStyleImages.length === 0}
+                className={`w-full bg-stone-950 text-white font-medium h-12 rounded-xl transition-all shadow-lg shadow-stone-200 ${profile.idealStyleImages.length === 0 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-stone-800'}`}
+              >
+                Analyze & Auto-Fill
+              </button>
+              
+              <button 
+                onClick={() => setStep(AppStep.OCCASION)}
+                className="w-full bg-stone-100 text-stone-500 font-medium h-12 rounded-xl transition-colors hover:bg-stone-200 hover:text-stone-700"
+              >
+                Skip (Configure Manually)
+              </button>
+          </div>
+          
+          <div className="mt-6 flex justify-center">
+             <button 
+                onClick={prevStep}
+                className="w-12 h-12 flex items-center justify-center border border-stone-200 rounded-xl hover:bg-stone-50 transition-colors"
+              >
+                <ChevronLeft size={24} className="text-stone-600" />
+              </button>
+          </div>
         </div>
     );
   };

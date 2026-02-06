@@ -134,87 +134,99 @@ export const runCategoryMicroAgent = async (
     for (let i = 0; i < liveCandidates.length; i += BATCH_SIZE) {
         const batch = liveCandidates.slice(i, i + BATCH_SIZE);
         
-        const batchPromises = batch.map(async (candidate) => {
+        // 1. Pre-fetch content for the batch (Parallel is fine for our proxy)
+        const batchWithContent = await Promise.all(batch.map(async (candidate) => {
+            let pageContent = candidate.snippet || "";
+            let fetchSource = "snippet";
+
             try {
-                // 2. Fetch Content via Backend Proxy (Solves CORS)
-                let pageContent = candidate.snippet || "";
-                let fetchSource = "snippet";
-
-                try {
-                    const res = await fetch('/api/proxy', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: candidate.purchaseUrl })
-                    });
-                    
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.content) {
-                            pageContent = data.content; // Already cleaned on server
-                            fetchSource = "live_page";
-                        }
-                    }
-                } catch (proxyErr) {
-                    // Fallback to snippet if proxy fails
-                }
-
-                // 3. LLM Verification
-                const enrichmentPrompt = `
-                **PHASE 2: VERIFICATION AUDIT**
-                **Candidate:** ${candidate.name}
-                **Category:** ${category}
-                **Style:** ${preferences.stylePreference}
+                const res = await fetch('/api/proxy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: candidate.purchaseUrl })
+                });
                 
-                **Content Source:** ${fetchSource}
-                **Content Sample:** "${pageContent.slice(0, 1500)}"
-
-                **Task:** Verify this product.
-                
-                **Rules:**
-                - stockStatus: "UNAVAILABLE" if page says "sold out", "out of stock".
-                - stockStatus: "LIKELY_AVAILABLE" if "add to cart" or price visible.
-                - stockStatus: "UNCERTAIN" if unclear.
-
-                **Output Schema (JSON):**
-                {
-                  "isValidProductPage": boolean,
-                  "detectedCategory": string,
-                  "stockStatus": "UNAVAILABLE" | "LIKELY_AVAILABLE" | "UNCERTAIN",
-                  "price": string,
-                  "matchScore": number (0-100),
-                  "reason": string
-                }
-                `;
-
-                const analysisRes = await generateContentWithRetry(
-                    'gemini-3-flash-preview',
-                    {
-                        contents: { parts: [{ text: enrichmentPrompt }] },
-                        config: { responseMimeType: 'application/json' }
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.content) {
+                        pageContent = data.content; // Already cleaned on server
+                        fetchSource = "live_page";
                     }
-                );
-
-                const analysis = JSON.parse(analysisRes.text || "{}");
-
-                if (analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
-                    validatedItems.push({
-                        ...candidate,
-                        brand: candidate.name.split(' ')[0], // Heuristic if brand missing
-                        price: analysis.price || "Check Site",
-                        description: analysis.reason || candidate.snippet,
-                        stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
-                        matchScore: analysis.matchScore || 50,
-                        category: analysis.detectedCategory || category,
-                        id: `${category}_${validatedItems.length + 1}`,
-                        validationSource: fetchSource
-                    });
                 }
-            } catch (err) {
-                // Skip item on analysis failure
+            } catch (proxyErr) {
+                // Fallback to snippet if proxy fails
             }
-        });
+            return { ...candidate, pageContent, fetchSource };
+        }));
 
-        await Promise.all(batchPromises);
+        try {
+            // 2. Batch LLM Verification (Single API Call per Batch)
+            const enrichmentPrompt = `
+            **PHASE 2: BATCH VERIFICATION AUDIT**
+            **Category:** ${category}
+            **Style:** ${preferences.stylePreference}
+            
+            **Task:** Verify the following ${batchWithContent.length} items.
+            
+            **Items:**
+            ${batchWithContent.map((item, idx) => `
+            [ITEM ${idx}]
+            Name: ${item.name}
+            Source: ${item.fetchSource}
+            Content Sample: "${(item.pageContent || "").slice(0, 400).replace(/\n/g, ' ')}"
+            `).join('\n\n')}
+            
+            **Rules:**
+            - stockStatus: "UNAVAILABLE" if page says "sold out", "out of stock".
+            - stockStatus: "LIKELY_AVAILABLE" if "add to cart" or price visible.
+            - stockStatus: "UNCERTAIN" if unclear.
+
+            **Output Schema (Strict JSON Array):**
+            [
+              {
+                "index": 0, // Must match [ITEM 0]
+                "isValidProductPage": boolean,
+                "detectedCategory": string,
+                "stockStatus": "UNAVAILABLE" | "LIKELY_AVAILABLE" | "UNCERTAIN",
+                "price": string,
+                "matchScore": number (0-100),
+                "reason": string
+              }
+            ]
+            `;
+
+            const analysisRes = await generateContentWithRetry(
+                'gemini-3-flash-preview',
+                {
+                    contents: { parts: [{ text: enrichmentPrompt }] },
+                    config: { responseMimeType: 'application/json' }
+                }
+            );
+
+            const results = JSON.parse(analysisRes.text || "[]");
+            
+            if (Array.isArray(results)) {
+                results.forEach((analysis: any) => {
+                    const candidate = batchWithContent[analysis.index];
+                    if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
+                         validatedItems.push({
+                            ...candidate,
+                            brand: candidate.name.split(' ')[0], 
+                            price: analysis.price || "Check Site",
+                            description: analysis.reason || candidate.snippet,
+                            stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
+                            matchScore: analysis.matchScore || 50,
+                            category: analysis.detectedCategory || category,
+                            id: `${category}_${validatedItems.length + 1}`,
+                            validationSource: candidate.fetchSource
+                        });
+                    }
+                });
+            }
+        } catch (err) {
+            console.error(`[${category}] Batch Verification Failed`, err);
+            // Skip entire batch on catastrophic failure
+        }
     }
 
     // Sort by Match Score and limit to 7
