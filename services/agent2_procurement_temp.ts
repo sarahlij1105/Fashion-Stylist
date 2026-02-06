@@ -23,95 +23,125 @@ export const runCategoryMicroAgent = async (
     // User requested: Strict Search Criteria = gender (implicit in category usually) + size + category + color + style.
     // AND: Do NOT use the detailed 'vibe tags' for this strict search to avoid over-filtering.
     
-    // 1. Base Search Context: Style + Category
-    let searchContext = `${preferences.stylePreference} ${category}`.trim();
-
-    // 2. Add Colors if available (High priority filter)
-    // If style analysis provided specific colors for this category, use those.
-    // Otherwise fallback to general preference colors.
+    // 1. Sanitize Colors (Fix: Ensure "Shoes: Red" doesn't contaminate "Dress" search)
     let searchColors = preferences.colors; 
-    if (styleAnalysis?.detectedColors && styleAnalysis.detectedColors.length > 0) {
-        // Use the detected colors from the Style Analyzer
-         searchColors = styleAnalysis.detectedColors.join(' or ');
-    }
     
-    if (searchColors) {
-        searchContext = `${searchColors} ${searchContext}`;
+    if (styleAnalysis?.detectedColors && styleAnalysis.detectedColors.length > 0) {
+        const validColors: string[] = [];
+        const currentCategory = category.toLowerCase().trim();
+        
+        styleAnalysis.detectedColors.forEach(c => {
+            if (c.includes(':')) {
+                // Handle "Category: Color" format
+                const [catPrefix, colorVal] = c.split(':').map(s => s.trim());
+                // Fuzzy match: if "Dress" is requested, allow "Dress: Black" or "Maxi Dress: Black"
+                if (catPrefix.toLowerCase().includes(currentCategory) || currentCategory.includes(catPrefix.toLowerCase())) {
+                    validColors.push(colorVal);
+                }
+            } else {
+                validColors.push(c); // General color applies to everything
+            }
+        });
+        
+        if (validColors.length > 0) {
+            searchColors = validColors.join(' OR ');
+        }
     }
 
-    // 3. Add Gender/Size context (simplified for query string)
-    if (profile.gender) {
-        searchContext = `${profile.gender} ${searchContext}`;
-    }
+    // 2. Base Search Context
+    // Fix: stylePreference might be "Style1 OR Style2". This is valid for Google Search.
+    // We construct the query components carefully.
+    
+    const constructQuery = (includeStyle: boolean) => {
+        let parts = [];
+        
+        if (includeStyle && preferences.stylePreference) {
+            parts.push(preferences.stylePreference);
+        }
+        
+        if (searchColors) {
+            parts.push(searchColors);
+        }
+        
+        if (profile.gender) {
+            parts.push(profile.gender);
+        }
+        
+        parts.push(category);
+        
+        return parts.join(' ');
+    };
 
-    // Ensure "shopping" intent in query and exclude known noise
-    // REMOVED 'optimizationKeywords' (vibe tags) from the strict search query.
-    const query = `${searchContext} buy online -pinterest -lyst -polyvore`.trim();
+    const strictContext = constructQuery(true);
+    const strictQuery = `${strictContext} buy online -pinterest -lyst -polyvore`.trim();
 
     // ==========================================
     // PHASE 1: DISCOVERY (via Gemini Grounding)
     // ==========================================
-    console.log(`[${category}] Phase 1: Search via Gemini Grounding... Query: ${query}`);
+    console.log(`[${category}] Phase 1: Search via Gemini Grounding... Query: ${strictQuery}`);
     
     let candidates: any[] = [];
+    let finalQueryUsed = strictQuery;
     
-    try {
-        // Use Gemini with Google Search Tool
-        // This bypasses the need for GOOGLE_SEARCH_ENGINE_ID
-        const searchPrompt = `Search for 10 shopping links for: ${query}`;
-        
-        const searchResponse = await generateContentWithRetry(
-            'gemini-3-flash-preview',
-            {
-                contents: { parts: [{ text: searchPrompt }] },
-                config: {
-                    tools: [{ googleSearch: {} }],
-                    // Note: Response might not be JSON, we rely on grounding metadata
+    const performSearch = async (q: string) => {
+        try {
+            const searchPrompt = `Search for 10 shopping links for: ${q}`;
+            const searchResponse = await generateContentWithRetry(
+                'gemini-3-flash-preview',
+                {
+                    contents: { parts: [{ text: searchPrompt }] },
+                    config: {
+                        tools: [{ googleSearch: {} }]
+                    }
                 }
-            }
-        );
-        
-        // Extract URLs directly from Grounding Metadata
-        // The API returns sources in `groundingChunks` or `groundingMetadata`
-        // Inspect strict structure from the SDK response
-        const groundingMetadata = searchResponse.candidates?.[0]?.groundingMetadata;
-        const chunks = groundingMetadata?.groundingChunks || [];
-        
-        // Map chunks to our item format
-        const rawCandidates = chunks
-            .map((c: any) => c.web)
-            .filter((web: any) => web && web.uri && web.title);
-
-        // Deduplicate and basic filter
-        const seenUrls = new Set();
-        candidates = rawCandidates.filter((item: any) => {
-            const url = item.uri;
-            if (seenUrls.has(url)) return false;
-            // Filter out obviously non-product pages
-           if (url.includes('google.com') || url.includes('search?') || url.includes('youtube.com')) return false;
+            );
             
-            seenUrls.add(url);
-            return true;
-        }).map((item: any) => ({
-            name: item.title,
-            purchaseUrl: item.uri,
-            snippet: "Identified via Google Search Grounding", // Metadata often lacks snippets, we fetch content in Phase 2
-            source: "gemini_grounding"
-        }));
+            const groundingMetadata = searchResponse.candidates?.[0]?.groundingMetadata;
+            const chunks = groundingMetadata?.groundingChunks || [];
+            
+            const rawCandidates = chunks
+                .map((c: any) => c.web)
+                .filter((web: any) => web && web.uri && web.title);
 
-        console.log(`[${category}] Grounding found ${candidates.length} unique candidates.`);
+            const seenUrls = new Set();
+            return rawCandidates.filter((item: any) => {
+                const url = item.uri;
+                if (seenUrls.has(url)) return false;
+                if (url.includes('google.com') || url.includes('search?') || url.includes('youtube.com')) return false;
+                seenUrls.add(url);
+                return true;
+            }).map((item: any) => ({
+                name: item.title,
+                purchaseUrl: item.uri,
+                snippet: "Identified via Google Search Grounding",
+                source: "gemini_grounding"
+            }));
+        } catch (e) {
+            console.error(`[${category}] Grounding Search Failed for query: "${q}"`, e);
+            return [];
+        }
+    };
 
-    } catch (e) {
-        console.error(`[${category}] Phase 1 Grounding Failed`, e);
+    // Attempt 1: Strict Search
+    candidates = await performSearch(strictQuery);
+
+    // Attempt 2: Fallback Strategy (Relaxed Search)
+    if (candidates.length === 0) {
+        console.warn(`[${category}] Strict search yielded 0 results. Retrying with relaxed criteria...`);
+        
+        // Relaxed: Remove Style Preference, keep Color + Category + Gender
+        // This handles cases where "Goth" + "Black" + "Dress" is too narrow, but "Black Dress" is fine.
+        const relaxedContext = constructQuery(false); // includeStyle = false
+        const relaxedQuery = `${relaxedContext} buy online -pinterest -lyst -polyvore`.trim();
+        
+        finalQueryUsed = relaxedQuery;
+        candidates = await performSearch(relaxedQuery);
+        console.log(`[${category}] Relaxed search found ${candidates.length} candidates.`);
     }
 
-    // Fallback: If no API keys or backend, candidates is empty. 
-    // The previous logic used Gemini Tooling which hallucinated. 
-    // We strictly use the API results now for safety.
-
     if (candidates.length === 0) {
-        console.warn(`[${category}] No results found via Grounding.`);
-        return { category, items: [], rawResponse: "[]", searchCriteria: query, initialCandidateCount: 0 };
+        console.warn(`[${category}] No results found via Grounding (Strict & Relaxed).`);
+        return { category, items: [], rawResponse: "[]", searchCriteria: finalQueryUsed, initialCandidateCount: 0 };
     }
 
     // ==========================================
@@ -164,7 +194,7 @@ export const runCategoryMicroAgent = async (
             const enrichmentPrompt = `
             **PHASE 2: BATCH VERIFICATION AUDIT**
             **Category:** ${category}
-            **Style:** ${preferences.stylePreference}
+            **Style:** ${preferences.stylePreference || "General"}
             
             **Task:** Verify the following ${batchWithContent.length} items.
             
@@ -238,7 +268,7 @@ export const runCategoryMicroAgent = async (
         category, 
         items: finalItems, 
         rawResponse: JSON.stringify(finalItems),
-        searchCriteria: query,
+        searchCriteria: finalQueryUsed,
         initialCandidateCount: candidates.length
     };
 };

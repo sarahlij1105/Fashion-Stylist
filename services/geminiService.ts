@@ -69,6 +69,17 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
 // --- AGENT 1: The Vision Analyst ---
 export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose): Promise<Partial<UserProfile>> => {
   try {
+    // --- CACHE CHECK ---
+    // Generate signature from last 50 chars of image data (to handle large strings safely)
+    const imgSignature = dataUrl.slice(-50);
+    const cacheKey = `vision_analyst_${await cacheManager.generateFastHash(imgSignature + purpose)}`;
+    
+    const cachedResult = await cacheManager.checkCache(cacheKey);
+    if (cachedResult) {
+        console.log(">> Agent 1 (Vision Analyst): Cache Hit");
+        return cachedResult;
+    }
+
     const { mimeType, data } = parseDataUrl(dataUrl);
 
     // Path A = Matching (Keep items), Path B = New Outfit (Ignore items)
@@ -166,12 +177,17 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose)
         };
     }
 
-    return {
+    const result = {
         gender: parsed.gender?.value || 'Female',
         estimatedSize: parsed.estimatedSize?.value || 'M',
         currentStyle: parsed.currentStyle?.value || '',
         keptItems: parsed.keptItems ? parsed.keptItems.map((k: any) => k.item) : []
     };
+
+    // Cache the result
+    await cacheManager.setCache(cacheKey, result, 7200); // 2 hour TTL
+
+    return result;
 
   } catch (error) {
     console.error("Error analyzing photo:", error);

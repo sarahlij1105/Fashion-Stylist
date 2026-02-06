@@ -3,6 +3,7 @@ import { UserProfile, Preferences, StyleAnalysisResult, FashionPurpose } from ".
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
 import { fashionStyleLibrary } from "./fashionStyleLibrary";
 import { generateContentWithRetry } from "./geminiService";
+import { cacheManager } from "./cacheService";
 
 // REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
@@ -62,6 +63,18 @@ export const runStyleExampleAnalyzer = async (
   }
 
   try {
+    // --- CACHE CHECK ---
+    // Create a deterministic hash based on images and request items
+    // Use the first image + itemType to create a fast signature
+    const imagesSignature = profile.idealStyleImages.map(img => img.slice(-50)).join('_'); // Last 50 chars of each base64
+    const cacheKey = `style_analysis_${await cacheManager.generateFastHash(imagesSignature + preferences.itemType)}`;
+    
+    const cachedResult = await cacheManager.checkCache(cacheKey);
+    if (cachedResult) {
+        console.log(">> Agent 1.5 (Style Analyzer): Cache Hit");
+        return cachedResult;
+    }
+
     const vocabulary = getContextualVocabulary(preferences.itemType);
     const vocabularyJson = JSON.stringify(vocabulary, null, 2);
     
@@ -179,7 +192,7 @@ export const runStyleExampleAnalyzer = async (
     }
 
     // Map the LLM's new schema to the App's expected StyleAnalysisResult structure
-    return {
+    const result: StyleAnalysisResult = {
         analysisStatus: parsed.analysis_status || 'success',
         
         // NEW FIELDS FOR CONFIRMATION FLOW
@@ -195,6 +208,11 @@ export const runStyleExampleAnalyzer = async (
         },
         userFacingMessage: `Analyzed style: ${parsed.suggested_styles?.map((s: any) => s.name).join(', ') || 'Custom Style'}`
     };
+
+    // Cache the successful result
+    await cacheManager.setCache(cacheKey, result, 3600); // 1 hour TTL for style analysis
+
+    return result;
 
   } catch (error) {
     console.error("Error in Style Analyzer:", error);

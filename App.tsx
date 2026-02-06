@@ -250,13 +250,13 @@ export default function App() {
     if (step === AppStep.CONFIRMATION) {
        // Sync Confirmed Data to Preferences
        if (styleAnalysisResults) {
-           const topStyle = styleAnalysisResults.suggestedStyles?.[0]?.name;
+           const topStyle = styleAnalysisResults.suggestedStyles?.map(s => s.name).join(' OR ');
            const confirmedColors = styleAnalysisResults.detectedColors?.join(', ');
 
            setPreferences(prev => ({
                ...prev,
                // Use the confirmed style (fallback to empty if removed all)
-               stylePreference: topStyle || prev.stylePreference || "Custom", 
+               stylePreference: topStyle || prev.stylePreference || "", 
                // Use confirmed colors
                colors: confirmedColors || prev.colors || "Any",
                // Auto-fill occasion since we skipped it (optional, maybe leave blank or infer)
@@ -653,13 +653,19 @@ export default function App() {
     const MIN_LIMIT = 0;
     const MAX_LIMIT = 3000;
     
-    // Percentage for track coloring
+    // Convert current inputs to number safely for percentage calculation
+    // If input is empty string, default to 0 for slider position
     const minVal = minPrice === '' ? 0 : Number(minPrice);
-    const maxVal = maxPrice === '' ? 0 : Number(maxPrice);
+    const maxVal = maxPrice === '' ? MAX_LIMIT : Number(maxPrice);
     
-    // Percentage for track coloring
-    const minPercent = ((minVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
-    const maxPercent = ((maxVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100;
+    // Percentage for track coloring (clamped 0-100 for visual sanity)
+    const minPercent = Math.min(Math.max(((minVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100, 0), 100);
+    const maxPercent = Math.min(Math.max(((maxVal - MIN_LIMIT) / (MAX_LIMIT - MIN_LIMIT)) * 100, 0), 100);
+
+    // Validation
+    const isMinEmpty = minPrice === '';
+    const isMaxEmpty = maxPrice === '';
+    const isInvalidRange = !isMinEmpty && !isMaxEmpty && Number(maxPrice) < Number(minPrice);
 
     return (
     <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
@@ -712,11 +718,7 @@ export default function App() {
                           return;
                       }
                       const numVal = Number(val);
-                      // Only clamp the upper bound against maxPrice - 10, but allow lower values
-                      // Don't Math.min immediately if user is typing a smaller number
-                      if (numVal > (typeof maxPrice === 'number' ? maxPrice : MAX_LIMIT) - 10) {
-                          return; // Prevent overlapping
-                      }
+                      // Remove upper bound clamping to allow typing freely
                       setMinPrice(numVal);
                   }}
                   className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
@@ -738,19 +740,25 @@ export default function App() {
                           return;
                       }
                       const numVal = Number(val);
-                       // Only clamp the lower bound against minPrice + 10
-                      if (numVal < (typeof minPrice === 'number' ? minPrice : MIN_LIMIT) + 10) {
-                          return; // Prevent overlapping
-                      }
+                      // Remove lower bound clamping to allow typing freely
                       setMaxPrice(numVal);
                   }}
-                  className="w-full p-4 pl-8 bg-white border border-stone-200 rounded-xl font-bold text-stone-900 text-lg outline-none focus:border-stone-900"
+                  className={`w-full p-4 pl-8 bg-white border rounded-xl font-bold text-lg outline-none focus:border-stone-900 ${isInvalidRange ? 'border-red-300 text-red-600 bg-red-50' : 'border-stone-200 text-stone-900'}`}
                 />
              </div>
+             {isInvalidRange && (
+                 <p className="text-[10px] text-red-500 font-bold mt-1.5 flex items-center gap-1 animate-fade-in">
+                     <AlertCircle size={10} />
+                     Max must be higher than Min
+                 </p>
+             )}
            </div>
         </div>
 
         {/* Slider UI */}
+        {/* We use negative margins to allow the visual track to extend slightly beyond the content area if desired, 
+            but strictly speaking, "graphically having ends to both sides" implies it shouldn't just cut off. 
+            We'll make the container relative and ensure the track fills it fully. */}
         <div className="relative w-full h-12 mb-8 select-none">
             {/* Track Background */}
             <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-stone-200 rounded-full overflow-hidden"></div>
@@ -758,7 +766,7 @@ export default function App() {
             {/* Active Range Track */}
             <div 
                 className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-stone-900 rounded-full pointer-events-none"
-                style={{ left: `${minPercent}%`, width: `${maxPercent - minPercent}%` }}
+                style={{ left: `${minPercent}%`, width: `${Math.max(maxPercent - minPercent, 0)}%` }}
             ></div>
 
             {/* Range Inputs (Overlaid) */}
@@ -780,7 +788,7 @@ export default function App() {
                 min={MIN_LIMIT}
                 max={MAX_LIMIT}
                 step={10}
-                value={maxVal}
+                value={maxVal > MAX_LIMIT ? MAX_LIMIT : maxVal} // Visual clamp for slider thumb
                 onChange={(e) => {
                     const val = Math.max(Number(e.target.value), minVal + 50);
                     setMaxPrice(val);
@@ -790,11 +798,17 @@ export default function App() {
             />
         </div>
 
-        <p className="text-center text-stone-500 text-sm">Selected range: ${minVal} - ${maxVal}</p>
+        <p className="text-center text-stone-500 text-sm">
+            {maxVal > MAX_LIMIT ? `Selected range: $${minVal} - $${maxVal} (Custom)` : `Selected range: $${minVal} - $${maxVal}`}
+        </p>
 
-        <NavigationButtons onContinue={nextStep} onBack={prevStep} />
+        <NavigationButtons 
+            onContinue={nextStep} 
+            onBack={prevStep} 
+            disabled={isInvalidRange || isMinEmpty || isMaxEmpty}
+        />
     </div>
-  );
+    );
   };
 
 // Delivery render function removed
