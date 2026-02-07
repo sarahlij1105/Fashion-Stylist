@@ -68,6 +68,8 @@ export const runCategoryMicroAgent = async (
             const genderMap: Record<string, string> = {
                 'Female': "Women's",
                 'Male': "Men's",
+                'F': "Women's",
+                'M': "Men's",
                 'Non-Binary': "Unisex"
             };
             parts.push(genderMap[profile.gender] || profile.gender);

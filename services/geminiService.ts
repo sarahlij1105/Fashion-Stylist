@@ -100,7 +100,7 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose)
 
     **Your Tasks:**
     1. **Estimate User Attributes:**
-       - Gender (M/F/Non-binary/Unknown)
+       - Gender (Female/Male/Non-binary/Unknown)
        - Size: Use visual cues (body proportions, existing garment fit). Output standard sizes: XS, S, M, L, XL, XXL
        - Current Style: Classify as one of: Casual, Formal, Streetwear, Boho, Minimalist, Sporty, Vintage, Other
        **NEW: Provide confidence score (0-100%) for each estimate**
