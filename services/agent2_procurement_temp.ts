@@ -134,6 +134,8 @@ export const runCategoryMicroAgent = async (
     candidates = await performSearch(strictQuery);
 
     // Attempt 2: Fallback Strategy (Relaxed Search)
+    // DISABLED FOR DEBUGGING
+    /*
     if (candidates.length === 0) {
         console.warn(`[${category}] Strict search yielded 0 results. Retrying with relaxed criteria...`);
         
@@ -146,6 +148,7 @@ export const runCategoryMicroAgent = async (
         candidates = await performSearch(relaxedQuery);
         console.log(`[${category}] Relaxed search found ${candidates.length} candidates.`);
     }
+    */
 
     if (candidates.length === 0) {
         console.warn(`[${category}] No results found via Grounding (Strict & Relaxed).`);
@@ -229,7 +232,8 @@ export const runCategoryMicroAgent = async (
                 "stockStatus": "UNAVAILABLE" | "LIKELY_AVAILABLE" | "UNCERTAIN",
                 "price": string,
                 "matchScore": number (0-100),
-                "reason": string
+                "reason": string,
+                "debugRawStatus": string // NEW: Return raw status for debugging
               }
             ]
             `;
@@ -246,20 +250,27 @@ export const runCategoryMicroAgent = async (
                 
                 if (Array.isArray(results)) {
                     results.forEach((analysis: any) => {
-                        const candidate = batchWithContent[analysis.index];
-                        if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
-                             validated.push({
-                                ...candidate,
-                                brand: candidate.name.split(' ')[0], 
-                                price: analysis.price || "Check Site",
-                                description: analysis.reason || candidate.snippet,
-                                stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
-                                matchScore: analysis.matchScore || 50,
-                                category: analysis.detectedCategory || category,
-                                id: `${category}_${validated.length + 1}`,
-                                validationSource: candidate.fetchSource
-                            });
-                        }
+                    const candidate = batchWithContent[analysis.index];
+                    
+                    // DEBUG LOGGING
+                    console.log(`[${category}] Item ${analysis.index} Verification: Status=${analysis.stockStatus}, Reason="${analysis.reason}", RawStatus="${analysis.debugRawStatus}"`);
+
+                    if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
+                         validated.push({
+                            ...candidate,
+                            brand: candidate.name.split(' ')[0], 
+                            price: analysis.price || "Check Site",
+                            description: analysis.reason || candidate.snippet,
+                            stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
+                            matchScore: analysis.matchScore || 50,
+                            category: analysis.detectedCategory || category,
+                            id: `${category}_${validated.length + 1}`,
+                            validationSource: candidate.fetchSource,
+                            debugReason: analysis.reason // Store reason for potential debugging
+                        });
+                    } else if (candidate) {
+                        console.warn(`[${category}] Rejected Item ${analysis.index}: ${candidate.name} - ${analysis.reason}`);
+                    }
                     });
                 }
             } catch (err) {
@@ -279,6 +290,8 @@ export const runCategoryMicroAgent = async (
     let finalItems = await processCandidates(candidates);
 
     // 2. Fallback Logic: If Strict Search yielded 0 valid items, try Relaxed Search
+    // DISABLED FOR DEBUGGING
+    /*
     if (finalItems.length === 0) {
         console.warn(`[${category}] Strict search verified 0 items. Triggering Relaxed Search fallback...`);
         
@@ -296,6 +309,7 @@ export const runCategoryMicroAgent = async (
             candidates = relaxedCandidates;
         }
     }
+    */
 
     // Sort by Match Score and limit to 7
     finalItems = finalItems
