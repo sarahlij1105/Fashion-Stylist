@@ -53,13 +53,26 @@ export const runVerificationStep = async (
                 return false;
             }
 
-            // B. Blacklist only
-            if (BLACKLIST_DOMAINS.some(d => url.includes(d))) {
-                const reason = `${itemName}: Blacklisted domain`;
-                discardedReasons.push(reason);
-                debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
-                discardedCount++;
-                return false;
+            // B. Blacklist only (Domain check, not full URL)
+            try {
+                const hostname = new URL(url).hostname;
+                if (BLACKLIST_DOMAINS.some(d => hostname.includes(d))) {
+                    const reason = `${itemName}: Blacklisted domain (${hostname})`;
+                    discardedReasons.push(reason);
+                    debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
+                    discardedCount++;
+                    return false;
+                }
+            } catch (e) {
+                // If URL parse fails, fallback to simple include but maybe skip blocking to be safe?
+                // Or keep strict blocking for malformed URLs.
+                if (BLACKLIST_DOMAINS.some(d => url.includes(d))) {
+                    const reason = `${itemName}: Blacklisted domain (fallback check)`;
+                    discardedReasons.push(reason);
+                    debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
+                    discardedCount++;
+                    return false;
+                }
             }
 
             // C. Price check (generous)
