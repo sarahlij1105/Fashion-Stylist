@@ -28,7 +28,7 @@ export const runVerificationStep = async (
     let discardedCount = 0;
     const debugLogs: string[] = [];
 
-    const BLACKLIST_DOMAINS = ['pinterest', 'lyst', 'shopstyle', 'polyvore', 'temu', 'shein'];
+    const BLACKLIST_DOMAINS = ['pinterest', 'polyvore', 'temu', 'shein'];
     
     const parsePrice = (p: string) => parseFloat((p || '').replace(/[^0-9.]/g, '')) || 0;
     const priceParts = preferences.priceRange.replace(/\$/g, '').split('-');
