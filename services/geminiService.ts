@@ -300,6 +300,11 @@ export const searchAndRecommend = async (
         // Collect detailed logs for this category
         const logs = [procLog, verLog, scoreLog];
         
+        // Add debug logs from procurement if available
+        if (procurementResult.debugLogs) {
+            logs.push(...procurementResult.debugLogs);
+        }
+        
         return { 
             category, 
             scoredItems: scoredItems,

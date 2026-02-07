@@ -17,7 +17,7 @@ export const runCategoryMicroAgent = async (
     pathInstruction: string,
     today: string,
     styleAnalysis?: StyleAnalysisResult
-): Promise<{ category: string, items: any[], rawResponse: string, searchCriteria: string, initialCandidateCount: number }> => {
+): Promise<{ category: string, items: any[], rawResponse: string, searchCriteria: string, initialCandidateCount: number, debugLogs?: string[] }> => {
     
     // --- SETUP: EXTRACT SEARCH CRITERIA ---
     // User requested: Strict Search Criteria = gender (implicit in category usually) + size + category + color + style.
@@ -156,7 +156,7 @@ export const runCategoryMicroAgent = async (
     }
 
     // --- HELPER: Process Candidates Batch ---
-    const processCandidates = async (candidatesToProcess: any[]): Promise<any[]> => {
+    const processCandidates = async (candidatesToProcess: any[]): Promise<{ validated: any[], debugLogs: string[] }> => {
         // 1. Basic URL Filter
         const liveCandidates = candidatesToProcess.filter(c => 
             c.purchaseUrl && 
@@ -166,6 +166,7 @@ export const runCategoryMicroAgent = async (
         );
         
         const validated: any[] = [];
+        const debugLogs: string[] = [];
         
         // Process in batches
         const BATCH_SIZE = 5;
@@ -198,45 +199,45 @@ export const runCategoryMicroAgent = async (
             }));
 
             try {
-            // 2. Batch LLM Verification (Single API Call per Batch)
-            const enrichmentPrompt = `
-            **PHASE 2: BATCH VERIFICATION AUDIT**
-            **Category:** ${category}
-            **Style:** ${preferences.stylePreference || "General"}
-            
-            **Task:** Verify the following ${batchWithContent.length} items.
-            
-            **Items:**
-            ${batchWithContent.map((item, idx) => `
-            [ITEM ${idx}]
-            Name: ${item.name}
-            Source: ${item.fetchSource}
-            Content Sample: "${(item.pageContent || "").slice(0, 400).replace(/\n/g, ' ')}"
-            `).join('\n\n')}
-            
-            **Rules:**
-            - stockStatus: "UNAVAILABLE" if page says "sold out", "out of stock".
-            - stockStatus: "LIKELY_AVAILABLE" if "add to cart" or price visible.
-            - stockStatus: "UNCERTAIN" if unclear (DEFAULT TO THIS if unsure).
-            
-            **CRITICAL:**
-            - Be LENIENT. If it looks like a product page, assume it is valid unless EXPLICITLY "sold out".
-            - Do NOT reject items just because you can't see the price in the snippet. Set price to "Check Site".
+                // 2. Batch LLM Verification (Single API Call per Batch)
+                const enrichmentPrompt = `
+                **PHASE 2: BATCH VERIFICATION AUDIT**
+                **Category:** ${category}
+                **Style:** ${preferences.stylePreference || "General"}
+                
+                **Task:** Verify the following ${batchWithContent.length} items.
+                
+                **Items:**
+                ${batchWithContent.map((item, idx) => `
+                [ITEM ${idx}]
+                Name: ${item.name}
+                Source: ${item.fetchSource}
+                Content Sample: "${(item.pageContent || "").slice(0, 400).replace(/\n/g, ' ')}"
+                `).join('\n\n')}
+                
+                **Rules:**
+                - stockStatus: "UNAVAILABLE" if page says "sold out", "out of stock".
+                - stockStatus: "LIKELY_AVAILABLE" if "add to cart" or price visible.
+                - stockStatus: "UNCERTAIN" if unclear (DEFAULT TO THIS if unsure).
+                
+                **CRITICAL:**
+                - Be LENIENT. If it looks like a product page, assume it is valid unless EXPLICITLY "sold out".
+                - Do NOT reject items just because you can't see the price in the snippet. Set price to "Check Site".
 
-            **Output Schema (Strict JSON Array):**
-            [
-              {
-                "index": 0, // Must match [ITEM 0]
-                "isValidProductPage": boolean,
-                "detectedCategory": string,
-                "stockStatus": "UNAVAILABLE" | "LIKELY_AVAILABLE" | "UNCERTAIN",
-                "price": string,
-                "matchScore": number (0-100),
-                "reason": string,
-                "debugRawStatus": string // NEW: Return raw status for debugging
-              }
-            ]
-            `;
+                **Output Schema (Strict JSON Array):**
+                [
+                  {
+                    "index": 0, // Must match [ITEM 0]
+                    "isValidProductPage": boolean,
+                    "detectedCategory": string,
+                    "stockStatus": "UNAVAILABLE" | "LIKELY_AVAILABLE" | "UNCERTAIN",
+                    "price": string,
+                    "matchScore": number (0-100),
+                    "reason": string,
+                    "debugRawStatus": string // NEW: Return raw status for debugging
+                  }
+                ]
+                `;
 
                 const analysisRes = await generateContentWithRetry(
                     'gemini-3-flash-preview',
@@ -253,7 +254,9 @@ export const runCategoryMicroAgent = async (
                     const candidate = batchWithContent[analysis.index];
                     
                     // DEBUG LOGGING
-                    console.log(`[${category}] Item ${analysis.index} Verification: Status=${analysis.stockStatus}, Reason="${analysis.reason}", RawStatus="${analysis.debugRawStatus}"`);
+                    const logMsg = `[${category}] Item ${analysis.index} Verification: Status=${analysis.stockStatus}, Reason="${analysis.reason}", RawStatus="${analysis.debugRawStatus}"`;
+                    console.log(logMsg);
+                    debugLogs.push(logMsg);
 
                     if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
                          validated.push({
@@ -269,16 +272,19 @@ export const runCategoryMicroAgent = async (
                             debugReason: analysis.reason // Store reason for potential debugging
                         });
                     } else if (candidate) {
-                        console.warn(`[${category}] Rejected Item ${analysis.index}: ${candidate.name} - ${analysis.reason}`);
+                        const rejectMsg = `[${category}] Rejected Item ${analysis.index}: ${candidate.name} - ${analysis.reason}`;
+                        console.warn(rejectMsg);
+                        debugLogs.push(rejectMsg);
                     }
                     });
                 }
             } catch (err) {
                 console.error(`[${category}] Batch Verification Failed`, err);
+                debugLogs.push(`[${category}] Batch Verification Failed: ${err}`);
                 // Skip entire batch on catastrophic failure
             }
         }
-        return validated;
+        return { validated, debugLogs };
     };
 
     // ==========================================
@@ -287,7 +293,7 @@ export const runCategoryMicroAgent = async (
     console.log(`[${category}] Phase 2: Enrichment for candidates...`);
 
     // 1. Process Strict Candidates
-    let finalItems = await processCandidates(candidates);
+    let { validated: finalItems, debugLogs } = await processCandidates(candidates);
 
     // 2. Fallback Logic: If Strict Search yielded 0 valid items, try Relaxed Search
     // DISABLED FOR DEBUGGING
@@ -304,7 +310,9 @@ export const runCategoryMicroAgent = async (
         console.log(`[${category}] Relaxed search found ${relaxedCandidates.length} candidates.`);
         
         if (relaxedCandidates.length > 0) {
-            finalItems = await processCandidates(relaxedCandidates);
+            const relaxedResult = await processCandidates(relaxedCandidates);
+            finalItems = relaxedResult.validated;
+            debugLogs.push(...relaxedResult.debugLogs);
             // Update initialCandidateCount to reflect the successful search
             candidates = relaxedCandidates;
         }
@@ -321,7 +329,8 @@ export const runCategoryMicroAgent = async (
         items: finalItems, 
         rawResponse: JSON.stringify(finalItems),
         searchCriteria: finalQueryUsed,
-        initialCandidateCount: candidates.length
+        initialCandidateCount: candidates.length,
+        debugLogs // Return logs to orchestrator
     };
 };
 
