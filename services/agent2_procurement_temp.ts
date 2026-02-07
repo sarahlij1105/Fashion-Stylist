@@ -106,7 +106,7 @@ export const runCategoryMicroAgent = async (
             // For this implementation, I will assume we can call it directly for now or use a proxy.
             // Let's use the existing /api/proxy to fetch the SerpApi JSON to avoid CORS issues.
             
-            const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=15`;
+            const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=20`;
             
             const res = await fetch('/api/proxy', {
                 method: 'POST',
@@ -191,7 +191,7 @@ export const runCategoryMicroAgent = async (
             c.purchaseUrl.startsWith('http') &&
             !c.purchaseUrl.includes('pinterest.') &&
             !c.purchaseUrl.includes('instagram.')
-        );
+        ).slice(0, 20); // Limit to 20 items max for performance
         
         const validated: any[] = [];
         const debugLogs: string[] = [];
@@ -199,11 +199,15 @@ export const runCategoryMicroAgent = async (
         console.log(`[${category}] Processing ${liveCandidates.length} candidates after basic filtering (from ${candidatesToProcess.length} raw).`);
         debugLogs.push(`[${category}] Processing ${liveCandidates.length} candidates after basic filtering (from ${candidatesToProcess.length} raw).`);
 
-        // Process in batches
+        // Process in Parallel Batches
         const BATCH_SIZE = 5;
+        const batches = [];
+        
         for (let i = 0; i < liveCandidates.length; i += BATCH_SIZE) {
-            const batch = liveCandidates.slice(i, i + BATCH_SIZE);
-            
+            batches.push(liveCandidates.slice(i, i + BATCH_SIZE));
+        }
+
+        const batchPromises = batches.map(async (batch, batchIdx) => {
             // 1. Pre-fetch content for the batch (Parallel is fine for our proxy)
             const batchWithContent = await Promise.all(batch.map(async (candidate) => {
                 let pageContent = candidate.snippet || "";
@@ -280,41 +284,54 @@ export const runCategoryMicroAgent = async (
 
                 const results = JSON.parse(analysisRes.text || "[]");
                 
+                const batchValidated: any[] = [];
+                const batchLogs: string[] = [];
+
                 if (Array.isArray(results)) {
                     results.forEach((analysis: any) => {
-                    const candidate = batchWithContent[analysis.index];
-                    
-                    // DEBUG LOGGING
-                    const logMsg = `[${category}] Item ${analysis.index} Verification: Status=${analysis.stockStatus}, Reason="${analysis.reason}", RawStatus="${analysis.debugRawStatus}"`;
-                    console.log(logMsg);
-                    debugLogs.push(logMsg);
+                        const candidate = batchWithContent[analysis.index];
+                        
+                        // DEBUG LOGGING
+                        const logMsg = `[${category}] Item ${analysis.index + (batchIdx * BATCH_SIZE)} Verification: Status=${analysis.stockStatus}, Reason="${analysis.reason}", RawStatus="${analysis.debugRawStatus}"`;
+                        console.log(logMsg);
+                        batchLogs.push(logMsg);
 
-                    if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
-                         validated.push({
-                            ...candidate,
-                            brand: candidate.name.split(' ')[0], 
-                            price: analysis.price || "Check Site",
-                            description: analysis.reason || candidate.snippet,
-                            stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
-                            matchScore: analysis.matchScore || 50,
-                            category: analysis.detectedCategory || category,
-                            id: `${category}_${validated.length + 1}`,
-                            validationSource: candidate.fetchSource,
-                            debugReason: analysis.reason // Store reason for potential debugging
-                        });
-                    } else if (candidate) {
-                        const rejectMsg = `[${category}] Rejected Item ${analysis.index}: ${candidate.name} - ${analysis.reason}`;
-                        console.warn(rejectMsg);
-                        debugLogs.push(rejectMsg);
-                    }
+                        if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
+                             batchValidated.push({
+                                ...candidate,
+                                brand: candidate.name.split(' ')[0], 
+                                price: analysis.price || "Check Site",
+                                description: analysis.reason || candidate.snippet,
+                                stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
+                                matchScore: analysis.matchScore || 50,
+                                category: analysis.detectedCategory || category,
+                                id: `${category}_${validated.length + batchValidated.length + 1}`,
+                                validationSource: candidate.fetchSource,
+                                debugReason: analysis.reason // Store reason for potential debugging
+                            });
+                        } else if (candidate) {
+                            const rejectMsg = `[${category}] Rejected Item ${analysis.index + (batchIdx * BATCH_SIZE)}: ${candidate.name} - ${analysis.reason}`;
+                            console.warn(rejectMsg);
+                            batchLogs.push(rejectMsg);
+                        }
                     });
                 }
+                return { batchValidated, batchLogs };
             } catch (err) {
                 console.error(`[${category}] Batch Verification Failed`, err);
-                debugLogs.push(`[${category}] Batch Verification Failed: ${err}`);
-                // Skip entire batch on catastrophic failure
+                return { batchValidated: [], batchLogs: [`[${category}] Batch Verification Failed: ${err}`] };
             }
-        }
+        });
+
+        // Wait for all batches to complete
+        const results = await Promise.all(batchPromises);
+        
+        // Flatten results
+        results.forEach(res => {
+            validated.push(...res.batchValidated);
+            debugLogs.push(...res.batchLogs);
+        });
+
         return { validated, debugLogs };
     };
 

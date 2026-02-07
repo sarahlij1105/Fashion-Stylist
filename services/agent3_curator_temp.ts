@@ -222,6 +222,7 @@ export const runOutfitComposerStep = async (
     - **Budget:** Total price of the Look must be within ${preferences.priceRange}.
     - **Cohesion:** Items in a Look must work together visually (color/style).
     - **Priority:** Prefer items with higher 'visualMatchScore'.
+    - **CRITICAL:** DO NOT modify URLs. Copy them EXACTLY as provided in the input. Do NOT invent placeholders like "example.com". If a URL is missing, leave it empty.
 
     **Output Schema (STRICT JSON):**
     Match the 'StylistResponse' interface.
