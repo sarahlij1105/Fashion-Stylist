@@ -137,7 +137,7 @@ export const runCategoryMicroAgent = async (
             
             return shoppingResults.map((item: any) => ({
                 name: item.title,
-                purchaseUrl: item.link, // SerpApi provides direct link or google link
+                purchaseUrl: item.link || item.product_link, // SerpApi provides direct link or google link
                 snippet: item.snippet || item.source,
                 price: item.price,
                 image: item.thumbnail,
@@ -196,6 +196,9 @@ export const runCategoryMicroAgent = async (
         const validated: any[] = [];
         const debugLogs: string[] = [];
         
+        console.log(`[${category}] Processing ${liveCandidates.length} candidates after basic filtering (from ${candidatesToProcess.length} raw).`);
+        debugLogs.push(`[${category}] Processing ${liveCandidates.length} candidates after basic filtering (from ${candidatesToProcess.length} raw).`);
+
         // Process in batches
         const BATCH_SIZE = 5;
         for (let i = 0; i < liveCandidates.length; i += BATCH_SIZE) {
