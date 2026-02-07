@@ -269,6 +269,9 @@ export const runStylistScoringStep = async (
             // 1. Build a Lookup Map from the original Scored Items
             const itemLookup = new Map<string, string>(); // Name -> URL
             
+            // Log for debugging
+            console.log(">> Starting URL Merge...");
+
             Object.values(scoredData.scoredItems).forEach((items: any) => {
                 items.forEach((item: any) => {
                     if (item.name && item.purchaseUrl) {
@@ -297,6 +300,7 @@ export const runStylistScoringStep = async (
                     });
                 }
             });
+            console.log(">> URL Merge Complete. Final Result:", JSON.stringify(result.recommendations, null, 2));
         }
         
         return result;

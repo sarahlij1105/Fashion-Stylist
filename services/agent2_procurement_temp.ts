@@ -91,6 +91,22 @@ export const runCategoryMicroAgent = async (
     let candidates: any[] = [];
     let finalQueryUsed = strictQuery;
     
+    const cleanSerpUrl = (url: string): string => {
+        if (url && url.includes('google.com/url')) {
+            try {
+                const urlObj = new URL(url);
+                const q = urlObj.searchParams.get('q'); // 'q' usually holds the target
+                if (q) return q;
+                
+                const urlParam = urlObj.searchParams.get('url'); // Sometimes it's 'url'
+                if (urlParam) return urlParam;
+            } catch (e) {
+                // If parsing fails, return original
+            }
+        }
+        return url;
+    };
+
     const performSearch = async (q: string) => {
         try {
             const serpApiKey = process.env.SERPAPI_KEY;
@@ -137,7 +153,7 @@ export const runCategoryMicroAgent = async (
             
             return shoppingResults.map((item: any) => ({
                 name: item.title,
-                purchaseUrl: item.link || item.product_link, // SerpApi provides direct link or google link
+                purchaseUrl: cleanSerpUrl(item.link || item.product_link), // SerpApi provides direct link or google link
                 snippet: item.snippet || item.source,
                 price: item.price,
                 image: item.thumbnail,
