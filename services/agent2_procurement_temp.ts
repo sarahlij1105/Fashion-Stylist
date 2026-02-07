@@ -144,52 +144,49 @@ export const runCategoryMicroAgent = async (
         return { category, items: [], rawResponse: "[]", searchCriteria: finalQueryUsed, initialCandidateCount: 0 };
     }
 
-    // ==========================================
-    // PHASE 2: ENRICHMENT & VERIFICATION (Backend Proxy)
-    // ==========================================
-    console.log(`[${category}] Phase 2: Enrichment for ${candidates.length} candidates...`);
-
-    // 1. Basic URL Filter
-    const liveCandidates = candidates.filter(c => 
-        c.purchaseUrl && 
-        c.purchaseUrl.startsWith('http') &&
-        !c.purchaseUrl.includes('pinterest.') &&
-        !c.purchaseUrl.includes('instagram.')
-    );
-    
-    const validatedItems: any[] = [];
-    
-    // Process in batches
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < liveCandidates.length; i += BATCH_SIZE) {
-        const batch = liveCandidates.slice(i, i + BATCH_SIZE);
+    // --- HELPER: Process Candidates Batch ---
+    const processCandidates = async (candidatesToProcess: any[]): Promise<any[]> => {
+        // 1. Basic URL Filter
+        const liveCandidates = candidatesToProcess.filter(c => 
+            c.purchaseUrl && 
+            c.purchaseUrl.startsWith('http') &&
+            !c.purchaseUrl.includes('pinterest.') &&
+            !c.purchaseUrl.includes('instagram.')
+        );
         
-        // 1. Pre-fetch content for the batch (Parallel is fine for our proxy)
-        const batchWithContent = await Promise.all(batch.map(async (candidate) => {
-            let pageContent = candidate.snippet || "";
-            let fetchSource = "snippet";
+        const validated: any[] = [];
+        
+        // Process in batches
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < liveCandidates.length; i += BATCH_SIZE) {
+            const batch = liveCandidates.slice(i, i + BATCH_SIZE);
+            
+            // 1. Pre-fetch content for the batch (Parallel is fine for our proxy)
+            const batchWithContent = await Promise.all(batch.map(async (candidate) => {
+                let pageContent = candidate.snippet || "";
+                let fetchSource = "snippet";
+
+                try {
+                    const res = await fetch('/api/proxy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: candidate.purchaseUrl })
+                    });
+                    
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.content) {
+                            pageContent = data.content; // Already cleaned on server
+                            fetchSource = "live_page";
+                        }
+                    }
+                } catch (proxyErr) {
+                    // Fallback to snippet if proxy fails
+                }
+                return { ...candidate, pageContent, fetchSource };
+            }));
 
             try {
-                const res = await fetch('/api/proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: candidate.purchaseUrl })
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.content) {
-                        pageContent = data.content; // Already cleaned on server
-                        fetchSource = "live_page";
-                    }
-                }
-            } catch (proxyErr) {
-                // Fallback to snippet if proxy fails
-            }
-            return { ...candidate, pageContent, fetchSource };
-        }));
-
-        try {
             // 2. Batch LLM Verification (Single API Call per Batch)
             const enrichmentPrompt = `
             **PHASE 2: BATCH VERIFICATION AUDIT**
@@ -209,7 +206,11 @@ export const runCategoryMicroAgent = async (
             **Rules:**
             - stockStatus: "UNAVAILABLE" if page says "sold out", "out of stock".
             - stockStatus: "LIKELY_AVAILABLE" if "add to cart" or price visible.
-            - stockStatus: "UNCERTAIN" if unclear.
+            - stockStatus: "UNCERTAIN" if unclear (DEFAULT TO THIS if unsure).
+            
+            **CRITICAL:**
+            - Be LENIENT. If it looks like a product page, assume it is valid unless EXPLICITLY "sold out".
+            - Do NOT reject items just because you can't see the price in the snippet. Set price to "Check Site".
 
             **Output Schema (Strict JSON Array):**
             [
@@ -225,42 +226,69 @@ export const runCategoryMicroAgent = async (
             ]
             `;
 
-            const analysisRes = await generateContentWithRetry(
-                'gemini-3-flash-preview',
-                {
-                    contents: { parts: [{ text: enrichmentPrompt }] },
-                    config: { responseMimeType: 'application/json' }
-                }
-            );
-
-            const results = JSON.parse(analysisRes.text || "[]");
-            
-            if (Array.isArray(results)) {
-                results.forEach((analysis: any) => {
-                    const candidate = batchWithContent[analysis.index];
-                    if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
-                         validatedItems.push({
-                            ...candidate,
-                            brand: candidate.name.split(' ')[0], 
-                            price: analysis.price || "Check Site",
-                            description: analysis.reason || candidate.snippet,
-                            stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
-                            matchScore: analysis.matchScore || 50,
-                            category: analysis.detectedCategory || category,
-                            id: `${category}_${validatedItems.length + 1}`,
-                            validationSource: candidate.fetchSource
-                        });
+                const analysisRes = await generateContentWithRetry(
+                    'gemini-3-flash-preview',
+                    {
+                        contents: { parts: [{ text: enrichmentPrompt }] },
+                        config: { responseMimeType: 'application/json' }
                     }
-                });
+                );
+
+                const results = JSON.parse(analysisRes.text || "[]");
+                
+                if (Array.isArray(results)) {
+                    results.forEach((analysis: any) => {
+                        const candidate = batchWithContent[analysis.index];
+                        if (candidate && analysis.isValidProductPage && analysis.stockStatus !== 'UNAVAILABLE') {
+                             validated.push({
+                                ...candidate,
+                                brand: candidate.name.split(' ')[0], 
+                                price: analysis.price || "Check Site",
+                                description: analysis.reason || candidate.snippet,
+                                stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
+                                matchScore: analysis.matchScore || 50,
+                                category: analysis.detectedCategory || category,
+                                id: `${category}_${validated.length + 1}`,
+                                validationSource: candidate.fetchSource
+                            });
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error(`[${category}] Batch Verification Failed`, err);
+                // Skip entire batch on catastrophic failure
             }
-        } catch (err) {
-            console.error(`[${category}] Batch Verification Failed`, err);
-            // Skip entire batch on catastrophic failure
+        }
+        return validated;
+    };
+
+    // ==========================================
+    // PHASE 2: ENRICHMENT & VERIFICATION (Backend Proxy)
+    // ==========================================
+    console.log(`[${category}] Phase 2: Enrichment for candidates...`);
+
+    // 1. Process Strict Candidates
+    let finalItems = await processCandidates(candidates);
+
+    // 2. Fallback Logic: If Strict Search yielded 0 valid items, try Relaxed Search
+    if (finalItems.length === 0) {
+        console.warn(`[${category}] Strict search verified 0 items. Triggering Relaxed Search fallback...`);
+        
+        // Relaxed: Remove Style Preference, keep Color + Category + Gender
+        const relaxedContext = constructQuery(false); // includeStyle = false
+        const relaxedQuery = `${relaxedContext} buy online -pinterest -lyst -polyvore`.trim();
+        
+        finalQueryUsed = relaxedQuery;
+        const relaxedCandidates = await performSearch(relaxedQuery);
+        console.log(`[${category}] Relaxed search found ${relaxedCandidates.length} candidates.`);
+        
+        if (relaxedCandidates.length > 0) {
+            finalItems = await processCandidates(relaxedCandidates);
         }
     }
 
     // Sort by Match Score and limit to 7
-    const finalItems = validatedItems
+    finalItems = finalItems
         .sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0))
         .slice(0, 7);
 
