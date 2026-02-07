@@ -304,7 +304,11 @@ export const searchAndRecommend = async (
         if (procurementResult.debugLogs) {
             logs.push(...procurementResult.debugLogs);
         }
-        
+        // Add debug logs from verification if available
+        if (verificationResult.debugLogs) {
+            logs.push(...verificationResult.debugLogs);
+        }
+
         return { 
             category, 
             scoredItems: scoredItems,

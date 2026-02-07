@@ -1058,7 +1058,7 @@ export default function App() {
           <div className="flex items-center justify-between pb-4">
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => setStep(AppStep.GOAL_SELECTION)}
+                onClick={() => setStep(AppStep.PRICE_RANGE)}
                 className="p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
               >
                 <ArrowLeft size={20} />

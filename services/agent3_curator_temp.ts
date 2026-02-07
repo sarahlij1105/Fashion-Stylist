@@ -26,6 +26,7 @@ export const runVerificationStep = async (
     const validatedItems: Record<string, any[]> = {};
     const discardedReasons: string[] = [];
     let discardedCount = 0;
+    const debugLogs: string[] = [];
 
     const BLACKLIST_DOMAINS = ['pinterest', 'lyst', 'shopstyle', 'polyvore', 'temu', 'shein'];
     
@@ -35,22 +36,28 @@ export const runVerificationStep = async (
     const budgetCap = maxBudget * 1.3; // 30% buffer
 
     Object.entries(itemsMap).forEach(([category, items]) => {
+        debugLogs.push(`[VerificationStep] Processing ${Array.isArray(items) ? items.length : 0} items for category '${category}'`);
+        
         if (!Array.isArray(items)) return;
 
-        validatedItems[category] = items.filter(item => {
+        validatedItems[category] = items.filter((item, idx) => {
             const url = (item.purchaseUrl || item.sourceUrl || '').toLowerCase();
             const itemName = item.name || 'Unknown';
 
             // A. Basic URL check (no CORS-dependent validation!)
             if (!url || url.length < 15) {
-                discardedReasons.push(`${itemName}: No URL`);
+                const reason = `${itemName}: No URL or too short`;
+                discardedReasons.push(reason);
+                debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
                 discardedCount++;
                 return false;
             }
 
             // B. Blacklist only
             if (BLACKLIST_DOMAINS.some(d => url.includes(d))) {
-                discardedReasons.push(`${itemName}: Blacklisted domain`);
+                const reason = `${itemName}: Blacklisted domain`;
+                discardedReasons.push(reason);
+                debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
                 discardedCount++;
                 return false;
             }
@@ -58,7 +65,9 @@ export const runVerificationStep = async (
             // C. Price check (generous)
             const price = parsePrice(item.price);
             if (price > budgetCap && price > 0) {
-                discardedReasons.push(`${itemName}: Over budget ($${price})`);
+                const reason = `${itemName}: Over budget ($${price} > $${budgetCap})`;
+                discardedReasons.push(reason);
+                debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
                 discardedCount++;
                 return false;
             }
@@ -66,7 +75,9 @@ export const runVerificationStep = async (
             // D. DO NOT REJECT 'RISK' - too aggressive!
             // Only reject explicit 'UNAVAILABLE'
             if (item.stockStatus === 'UNAVAILABLE') {
-                discardedReasons.push(`${itemName}: Explicitly unavailable`);
+                const reason = `${itemName}: Explicitly unavailable`;
+                discardedReasons.push(reason);
+                debugLogs.push(`[VerificationStep] Discarded item ${idx}: ${reason}`);
                 discardedCount++;
                 return false;
             }
@@ -78,9 +89,11 @@ export const runVerificationStep = async (
 
             return true;
         });
+        
+        debugLogs.push(`[VerificationStep] Category '${category}' finished. Kept ${validatedItems[category].length} items.`);
     });
 
-    return { status: "success", validatedItems, discardedCount, discardedReasons };
+    return { status: "success", validatedItems, discardedCount, discardedReasons, debugLogs };
 };
 
 // --- STEP 2: STYLIST SCORER AGENT ---
