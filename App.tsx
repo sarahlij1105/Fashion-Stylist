@@ -1101,15 +1101,23 @@ export default function App() {
                                                     <p className="text-xs text-stone-500 truncate">{comp.brand} • {comp.price}</p>
                                                 </div>
                                                 <div className="flex flex-col gap-1">
-                                                    <a 
-                                                        href={comp.purchaseUrl}
-                                                        target="_blank" 
-                                                        rel="noopener noreferrer"
-                                                        className="self-center p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
-                                                        title="Buy Item"
-                                                    >
-                                                        <ExternalLink size={16} />
-                                                    </a>
+                                                    {/* Force Absolute URL or Show Error */}
+                                                    {comp.purchaseUrl && comp.purchaseUrl.startsWith('http') ? (
+                                                        <a 
+                                                            href={comp.purchaseUrl}
+                                                            target="_blank" 
+                                                            rel="noopener noreferrer"
+                                                            className="self-center p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
+                                                            title="Buy Item"
+                                                        >
+                                                            <ExternalLink size={16} />
+                                                        </a>
+                                                    ) : (
+                                                        <div className="self-center p-2 text-red-300 cursor-not-allowed" title="Link Unavailable">
+                                                            <ExternalLink size={16} />
+                                                        </div>
+                                                    )}
+                                                    
                                                     {comp.fallbackSearchUrl && (
                                                       <a 
                                                         href={comp.fallbackSearchUrl}

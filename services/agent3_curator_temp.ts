@@ -189,16 +189,19 @@ export const runStylistScoringStep = async (
     }
 };
 
-// --- STEP 3: OUTFIT COMPOSER AGENT ---
-export const runOutfitComposerStep = async (
-    scoredData: any,
-    preferences: Preferences,
-    profile: UserProfile,
-    imageParts: any[]
-): Promise<StylistResponse> => {
-    const categories = Object.keys(scoredData.scoredItems || {});
-    
-    // Check if we have enough items
+    // --- STEP 3: OUTFIT COMPOSER AGENT ---
+    export const runOutfitComposerStep = async (
+        scoredData: any,
+        preferences: Preferences,
+        profile: UserProfile,
+        imageParts: any[]
+    ): Promise<StylistResponse> => {
+        const categories = Object.keys(scoredData.scoredItems || {});
+        
+        // DEBUG: Log input URLs
+        console.log(">> Composer Input Items:", JSON.stringify(scoredData.scoredItems, null, 2));
+
+        // Check if we have enough items
     let totalItems = 0;
     categories.forEach(c => totalItems += scoredData.scoredItems[c].length);
     
