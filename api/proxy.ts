@@ -29,6 +29,17 @@ export default async function handler(req: Request) {
        return new Response(JSON.stringify({ error: `Target URL returned status ${response.status}` }), { status: 502 });
     }
 
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+        // If target returns JSON (e.g. SerpApi), pass it through directly
+        const jsonData = await response.json();
+        return new Response(JSON.stringify({ content: JSON.stringify(jsonData) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
+
     const html = await response.text();
 
     // Lightweight cleaning to reduce token usage when passed to LLM
