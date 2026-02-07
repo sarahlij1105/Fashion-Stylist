@@ -151,8 +151,16 @@ export const runCategoryMicroAgent = async (
     */
 
     if (candidates.length === 0) {
-        console.warn(`[${category}] No results found via Grounding (Strict & Relaxed).`);
-        return { category, items: [], rawResponse: "[]", searchCriteria: finalQueryUsed, initialCandidateCount: 0 };
+        const msg = `[${category}] Phase 1 Search returned 0 organic results for query: "${finalQueryUsed}". Potential causes: Ad dominance, strict keywords, or API filtering.`;
+        console.warn(msg);
+        return { 
+            category, 
+            items: [], 
+            rawResponse: "[]", 
+            searchCriteria: finalQueryUsed, 
+            initialCandidateCount: 0,
+            debugLogs: [msg]
+        };
     }
 
     // --- HELPER: Process Candidates Batch ---
