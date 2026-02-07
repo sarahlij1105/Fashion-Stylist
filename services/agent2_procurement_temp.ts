@@ -64,7 +64,13 @@ export const runCategoryMicroAgent = async (
         }
         
         if (profile.gender) {
-            parts.push(profile.gender);
+            // Map gender to search-friendly terms
+            const genderMap: Record<string, string> = {
+                'Female': "Women's",
+                'Male': "Men's",
+                'Non-Binary': "Unisex"
+            };
+            parts.push(genderMap[profile.gender] || profile.gender);
         }
         
         parts.push(category);
@@ -284,6 +290,8 @@ export const runCategoryMicroAgent = async (
         
         if (relaxedCandidates.length > 0) {
             finalItems = await processCandidates(relaxedCandidates);
+            // Update initialCandidateCount to reflect the successful search
+            candidates = relaxedCandidates;
         }
     }
 

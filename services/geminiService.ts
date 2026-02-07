@@ -269,7 +269,7 @@ export const searchAndRecommend = async (
         const t1 = performance.now();
         const procDuration = (t1 - t0).toFixed(0);
         
-        const procLog = `[${category}] Criteria: "${procurementResult.searchCriteria}" | Found: ${procurementResult.initialCandidateCount} | Kept: ${procurementResult.items.length} (${procDuration}ms)`;
+        const procLog = `[${category}] Criteria: "${procurementResult.searchCriteria}" | Found: ${procurementResult.initialCandidateCount} | Verified: ${procurementResult.items.length} (${procDuration}ms)`;
         
         // 2. Verification (Immediate Handoff)
         const t2 = performance.now();
