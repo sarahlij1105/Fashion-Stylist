@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => {
     define: {
       // Polyfill process.env.API_KEY specifically.
       'process.env.API_KEY': JSON.stringify(apiKey),
+      // Polyfill process.env.SERPAPI_KEY specifically.
+      'process.env.SERPAPI_KEY': JSON.stringify(env.SERPAPI_KEY || ''),
       // IMPORTANT: DO NOT define 'process.env': {} as it overrides other env vars and breaks things.
     },
     server: {

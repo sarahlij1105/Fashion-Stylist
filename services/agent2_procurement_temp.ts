@@ -84,48 +84,68 @@ export const runCategoryMicroAgent = async (
     const strictQuery = `${strictContext} buy online -pinterest -lyst -polyvore`.trim();
 
     // ==========================================
-    // PHASE 1: DISCOVERY (via Gemini Grounding)
+    // PHASE 1: DISCOVERY (via SerpApi)
     // ==========================================
-    console.log(`[${category}] Phase 1: Search via Gemini Grounding... Query: ${strictQuery}`);
+    console.log(`[${category}] Phase 1: Search via SerpApi... Query: ${strictQuery}`);
     
     let candidates: any[] = [];
     let finalQueryUsed = strictQuery;
     
     const performSearch = async (q: string) => {
         try {
-            const searchPrompt = `Search for 10 shopping links for: ${q}`;
-            const searchResponse = await generateContentWithRetry(
-                'gemini-3-flash-preview',
-                {
-                    contents: { parts: [{ text: searchPrompt }] },
-                    config: {
-                        tools: [{ googleSearch: {} }]
-                    }
-                }
-            );
-            
-            const groundingMetadata = searchResponse.candidates?.[0]?.groundingMetadata;
-            const chunks = groundingMetadata?.groundingChunks || [];
-            
-            const rawCandidates = chunks
-                .map((c: any) => c.web)
-                .filter((web: any) => web && web.uri && web.title);
+            const serpApiKey = process.env.SERPAPI_KEY;
+            if (!serpApiKey) {
+                console.warn("SERPAPI_KEY is missing. Falling back to empty results.");
+                return [];
+            }
 
-            const seenUrls = new Set();
-            return rawCandidates.filter((item: any) => {
-                const url = item.uri;
-                if (seenUrls.has(url)) return false;
-                if (url.includes('google.com') || url.includes('search?') || url.includes('youtube.com')) return false;
-                seenUrls.add(url);
-                return true;
-            }).map((item: any) => ({
+            // Use a cors proxy or backend if needed, but for now we try direct fetch if allowed or via proxy
+            // SerpApi usually requires backend, but we can try via our local proxy if we set it up,
+            // or just use the direct URL if we accept exposing key (not recommended for prod but ok for prototype)
+            // Ideally, we should route this through /api/proxy/serpapi to hide the key.
+            // For this implementation, I will assume we can call it directly for now or use a proxy.
+            // Let's use the existing /api/proxy to fetch the SerpApi JSON to avoid CORS issues.
+            
+            const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=15`;
+            
+            const res = await fetch('/api/proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: serpUrl })
+            });
+
+            if (!res.ok) {
+                console.error(`SerpApi fetch failed: ${res.status}`);
+                return [];
+            }
+
+            const data = await res.json();
+            // The proxy returns { content: string, ... }. We need to parse the content if it's stringified JSON.
+            // Wait, our proxy returns cleaned HTML text usually. 
+            // If we use the proxy for JSON, it might try to "clean" it.
+            // We might need a dedicated endpoint or just try to parse `data.content`.
+            
+            let searchResults: any = {};
+            try {
+                searchResults = JSON.parse(data.content);
+            } catch (e) {
+                console.error("Failed to parse SerpApi response via proxy", e);
+                return [];
+            }
+
+            const shoppingResults = searchResults.shopping_results || [];
+            
+            return shoppingResults.map((item: any) => ({
                 name: item.title,
-                purchaseUrl: item.uri,
-                snippet: "Identified via Google Search Grounding",
-                source: "gemini_grounding"
+                purchaseUrl: item.link, // SerpApi provides direct link or google link
+                snippet: item.snippet || item.source,
+                price: item.price,
+                image: item.thumbnail,
+                source: "serpapi_shopping"
             }));
+
         } catch (e) {
-            console.error(`[${category}] Grounding Search Failed for query: "${q}"`, e);
+            console.error(`[${category}] SerpApi Search Failed for query: "${q}"`, e);
             return [];
         }
     };
@@ -159,7 +179,7 @@ export const runCategoryMicroAgent = async (
             rawResponse: "[]", 
             searchCriteria: finalQueryUsed, 
             initialCandidateCount: 0,
-            debugLogs: [msg]
+            debugLogs: [msg] // Ensure this is returned
         };
     }
 
