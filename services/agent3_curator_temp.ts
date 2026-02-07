@@ -261,7 +261,46 @@ export const runStylistScoringStep = async (
     );
 
     try {
-        return JSON.parse(response.text || "{}");
+        const result = JSON.parse(response.text || "{}");
+        
+        // --- POST-PROCESS: URL MERGE FIX ---
+        // The LLM often breaks URLs. We must force the original valid URLs back into the result.
+        if (result.recommendations && Array.isArray(result.recommendations)) {
+            // 1. Build a Lookup Map from the original Scored Items
+            const itemLookup = new Map<string, string>(); // Name -> URL
+            
+            Object.values(scoredData.scoredItems).forEach((items: any) => {
+                items.forEach((item: any) => {
+                    if (item.name && item.purchaseUrl) {
+                        itemLookup.set(item.name.toLowerCase().trim(), item.purchaseUrl);
+                    }
+                });
+            });
+
+            // 2. Overwrite URLs in Recommendations
+            result.recommendations.forEach((outfit: any) => {
+                if (outfit.components && Array.isArray(outfit.components)) {
+                    outfit.components.forEach((comp: any) => {
+                        const key = comp.name?.toLowerCase().trim();
+                        // Try exact match
+                        if (itemLookup.has(key)) {
+                            comp.purchaseUrl = itemLookup.get(key);
+                        } else {
+                            // Try fuzzy match (if LLM slightly altered the name)
+                            for (const [origName, origUrl] of itemLookup.entries()) {
+                                if (origName.includes(key) || key.includes(origName)) {
+                                    comp.purchaseUrl = origUrl;
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        
+        return result;
+
     } catch (e) {
         console.error("Composer Agent Failed:", e);
         return { reflectionNotes: "Composer Error", recommendations: [] };
