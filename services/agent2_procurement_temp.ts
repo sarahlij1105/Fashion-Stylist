@@ -159,7 +159,7 @@ export const runCategoryMicroAgent = async (
             // For this implementation, I will assume we can call it directly for now or use a proxy.
             // Let's use the existing /api/proxy to fetch the SerpApi JSON to avoid CORS issues.
             
-            const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=20`;
+            const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=15`;
             
             const res = await fetch('/api/proxy', {
                 method: 'POST',
@@ -244,7 +244,7 @@ export const runCategoryMicroAgent = async (
             c.purchaseUrl.startsWith('http') &&
             !c.purchaseUrl.includes('pinterest.') &&
             !c.purchaseUrl.includes('instagram.')
-        ).slice(0, 20); // Limit to 20 items max for performance
+        ).slice(0, 15); // Limit to 15 items max for performance
         
         const validated: any[] = [];
         const debugLogs: string[] = [];

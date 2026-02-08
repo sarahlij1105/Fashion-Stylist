@@ -1525,7 +1525,7 @@ export default function App() {
       setIsAnalyzingCard2(true);
       try {
           // 1. Vision Analysis (Agent 1)
-          const analysis = await analyzeUserPhoto(profile.userImageBase64);
+          const analysis = await analyzeUserPhoto(profile.userImageBase64, preferences.purpose, profile.height);
           
           // Update Profile with detected attributes
           setProfile(prev => ({
