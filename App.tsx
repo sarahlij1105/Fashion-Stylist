@@ -4,7 +4,7 @@ import { analyzeUserPhoto, searchAndRecommend, searchAndRecommendCard1, generate
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+// import ReactMarkdown from 'react-markdown';
 
 const DefaultProfile: UserProfile = {
   gender: 'Female',
@@ -637,7 +637,8 @@ export default function App() {
           }
       }, []);
 
-      if (isLoading && !styleAnalysisResults) {
+      // Show loading state if analysis is running OR if results aren't ready yet
+      if (isLoading || !styleAnalysisResults) {
           return (
               <div className="flex flex-col items-center justify-center h-screen">
                   <div className="animate-spin w-12 h-12 border-4 border-stone-200 border-t-stone-900 rounded-full mb-4"></div>
@@ -1780,7 +1781,9 @@ export default function App() {
               <p className="text-stone-500 mb-6">Here is what I recommend to complete your look.</p>
 
               <div className="bg-stone-50 p-6 rounded-2xl border border-stone-100 prose prose-stone prose-sm max-w-none mb-6">
-                  <ReactMarkdown>{stylistRecommendation}</ReactMarkdown>
+                  <div className="whitespace-pre-wrap font-sans text-stone-700 leading-relaxed">
+                      {stylistRecommendation}
+                  </div>
               </div>
 
               <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm">
