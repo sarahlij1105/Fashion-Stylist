@@ -20,6 +20,9 @@ export enum AppStep {
   // New Card 2 Flow Steps
   CARD2_DETAILS = 'CARD2_DETAILS',
   CARD2_RECOMMENDATION = 'CARD2_RECOMMENDATION',
+  // Profile Flow
+  PROFILE_SETUP = 'PROFILE_SETUP',
+  PROFILE_VIEW = 'PROFILE_VIEW',
 }
 
 export enum FashionPurpose {
@@ -29,13 +32,17 @@ export enum FashionPurpose {
 
 export interface UserProfile {
   gender: string;
+  age?: string; // e.g. "25-30"
   height?: string; // e.g. "165 cm" or "5'6\""
+  heightCategory?: string; // e.g. "Average", "Tall", "Petite"
   shoeSize?: string; // e.g. "US 7"
   estimatedSize: string;
   currentStyle: string;
   keptItems?: string[]; // Inventory detected from photo for Path A
   userImageBase64: string | null;
+  profilePhotoBase64?: string | null; // Dedicated profile photo (persists independently)
   idealStyleImages: string[]; // Array of base64 images for Agent 1.5
+  isProfileSetup?: boolean; // Whether the user has completed profile setup
 }
 
 export interface Preferences {

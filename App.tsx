@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
-import { analyzeUserPhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight } from 'lucide-react';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save } from 'lucide-react';
 // import ReactMarkdown from 'react-markdown';
 
 const DefaultProfile: UserProfile = {
@@ -12,7 +12,9 @@ const DefaultProfile: UserProfile = {
   currentStyle: '',
   keptItems: [],
   userImageBase64: null,
+  profilePhotoBase64: null,
   idealStyleImages: [],
+  isProfileSetup: false,
 };
 
 const DefaultPreferences: Preferences = {
@@ -113,6 +115,11 @@ export default function App() {
   const [stylistSearchQueries, setStylistSearchQueries] = useState<Record<string, string>>({});
   const [isAnalyzingCard2, setIsAnalyzingCard2] = useState(false);
   const [isGeneratingRecs, setIsGeneratingRecs] = useState(false);
+
+  // Profile Page State
+  const [isAnalyzingProfile, setIsAnalyzingProfile] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [previousStep, setPreviousStep] = useState<AppStep>(AppStep.GOAL_SELECTION);
 
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
@@ -223,10 +230,11 @@ export default function App() {
         setIsLoading(true);
         try {
           const analysis = await analyzeUserPhoto(base64String, preferences.purpose);
+          // Preserve gender/size from saved profile if set up; only update outfit-related fields
           setProfile(prev => ({
             ...prev,
-            gender: analysis.gender || prev.gender,
-            estimatedSize: analysis.estimatedSize || prev.estimatedSize,
+            gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
+            estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
             currentStyle: analysis.currentStyle || prev.currentStyle,
             keptItems: analysis.keptItems || []
           }));
@@ -559,60 +567,84 @@ export default function App() {
               </div>
           </div>
 
-          {/* Size/Gender */}
+          {/* Profile Summary (from saved profile) */}
           <div className="mb-8">
-              <label className="block text-sm font-bold text-stone-900 mb-4">Size & Fit</label>
-              
-              <div className="flex gap-4 mb-4">
-                  <button 
-                    onClick={() => setUseManualSize(false)}
-                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${!useManualSize ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
-                  >
-                    AI Estimate
-                  </button>
-                  <button 
-                    onClick={() => setUseManualSize(true)}
-                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${useManualSize ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
-                  >
-                    Manual Input
-                  </button>
-              </div>
-
-              {useManualSize ? (
-                  <div className="space-y-4 animate-fade-in">
-                      <select 
-                         value={profile.gender}
-                         onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
-                         className="w-full p-4 bg-white border border-stone-200 rounded-xl outline-none"
+              <label className="block text-sm font-bold text-stone-900 mb-3">Your Profile</label>
+              {profile.isProfileSetup ? (
+                  <div className="bg-stone-50 p-4 rounded-xl border border-stone-100 space-y-3">
+                      <div className="flex items-center gap-3">
+                          {profile.profilePhotoBase64 ? (
+                              <img src={profile.profilePhotoBase64} className="w-12 h-12 rounded-full object-cover border-2 border-stone-200" />
+                          ) : (
+                              <div className="w-12 h-12 rounded-full bg-stone-200 flex items-center justify-center">
+                                  <User size={20} className="text-stone-400" />
+                              </div>
+                          )}
+                          <div className="flex-1">
+                              <p className="text-sm font-bold text-stone-900">{profile.gender} · Size {profile.estimatedSize}</p>
+                              <p className="text-xs text-stone-500">
+                                  {[profile.height, profile.heightCategory, profile.shoeSize ? `Shoe ${profile.shoeSize}` : ''].filter(Boolean).join(' · ') || 'Profile saved'}
+                              </p>
+                          </div>
+                          <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle2 size={10} /> Saved
+                          </span>
+                      </div>
+                      <button
+                          onClick={() => {
+                              setPreviousStep(step);
+                              setStep(AppStep.PROFILE_VIEW);
+                          }}
+                          className="w-full text-xs font-bold text-stone-500 hover:text-stone-900 py-1.5 bg-white rounded-lg border border-stone-200 transition-colors"
                       >
-                          <option value="Female">Female</option>
-                          <option value="Male">Male</option>
-                      </select>
-                      <input 
-                         placeholder="Size (e.g. M, US 6)"
-                         value={profile.estimatedSize}
-                         onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
-                         className="w-full p-4 bg-white border border-stone-200 rounded-xl outline-none"
-                      />
+                          Edit Profile
+                      </button>
                   </div>
               ) : (
-                  <div className="animate-fade-in">
-                      <div className="bg-stone-100 rounded-xl p-4 flex items-center justify-center border-2 border-dashed border-stone-200 relative min-h-[150px]">
-                          {profile.userImageBase64 ? (
-                              <img src={profile.userImageBase64} className="h-32 object-contain rounded" />
-                          ) : (
-                              <label className="flex flex-col items-center cursor-pointer text-stone-400">
-                                  <Camera size={24} className="mb-2"/>
-                                  <span className="text-xs font-bold">Upload Body Photo</span>
-                                  <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, 'userImageBase64')} />
-                              </label>
-                          )}
+                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 space-y-3">
+                      <div className="flex items-center gap-2">
+                          <AlertCircle size={16} className="text-amber-600 shrink-0" />
+                          <p className="text-xs text-amber-800">No profile set up yet. Set up your profile for better results, or enter details below.</p>
                       </div>
-                      {profile.estimatedSize && !isLoading && (
-                          <div className="mt-2 text-xs font-bold text-green-600 flex items-center gap-1">
-                              <CheckCircle2 size={12} /> Estimated: {profile.estimatedSize}
+                      <button
+                          onClick={() => {
+                              setPreviousStep(step);
+                              setStep(AppStep.PROFILE_SETUP);
+                          }}
+                          className="w-full text-xs font-bold text-amber-700 hover:text-amber-900 py-2 bg-white rounded-lg border border-amber-200 transition-colors"
+                      >
+                          Set Up Profile
+                      </button>
+                      {/* Inline fallback fields */}
+                      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-amber-100">
+                          <div>
+                              <label className="text-[10px] font-medium text-stone-500 mb-0.5 block">Gender</label>
+                              <select 
+                                  value={profile.gender}
+                                  onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
+                                  className="w-full px-2 py-2 bg-white border border-stone-200 rounded-lg text-xs outline-none"
+                              >
+                                  <option value="Female">Female</option>
+                                  <option value="Male">Male</option>
+                                  <option value="Non-binary">Non-binary</option>
+                              </select>
                           </div>
-                      )}
+                          <div>
+                              <label className="text-[10px] font-medium text-stone-500 mb-0.5 block">Size</label>
+                              <select 
+                                  value={profile.estimatedSize}
+                                  onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
+                                  className="w-full px-2 py-2 bg-white border border-stone-200 rounded-lg text-xs outline-none"
+                              >
+                                  <option value="XS">XS</option>
+                                  <option value="S">S</option>
+                                  <option value="M">M</option>
+                                  <option value="L">L</option>
+                                  <option value="XL">XL</option>
+                                  <option value="XXL">XXL</option>
+                              </select>
+                          </div>
+                      </div>
                   </div>
               )}
           </div>
@@ -1510,15 +1542,16 @@ export default function App() {
       
       setIsAnalyzingCard2(true);
       try {
-          // 1. Vision Analysis (Agent 1)
+          // 1. Vision Analysis (Agent 1) - detect outfit items
           const analysis = await analyzeUserPhoto(profile.userImageBase64, preferences.purpose, profile.height);
           
-          // Update Profile with detected attributes
+          // Only update outfit-related fields (keptItems, currentStyle).
+          // Preserve gender/size from the saved user profile if it exists.
           setProfile(prev => ({
               ...prev,
-              gender: analysis.gender,
-              estimatedSize: analysis.estimatedSize,
-              currentStyle: analysis.currentStyle,
+              gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
+              estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
+              currentStyle: analysis.currentStyle || prev.currentStyle,
               keptItems: analysis.keptItems || []
           }));
           
@@ -1717,28 +1750,14 @@ export default function App() {
                              </div>
                          </div>
                          
-                         <div className="grid grid-cols-2 gap-4">
-                             <div>
-                                 <label className="text-xs font-medium text-stone-500">Gender</label>
-                                 <select 
-                                    value={profile.gender}
-                                    onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
-                                    className="w-full mt-1 px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm"
-                                 >
-                                     <option value="Female">Female</option>
-                                     <option value="Male">Male</option>
-                                     <option value="Non-binary">Non-binary</option>
-                                 </select>
-                             </div>
-                             <div>
-                                 <label className="text-xs font-medium text-stone-500">Size</label>
-                                 <input 
-                                    type="text"
-                                    value={profile.estimatedSize}
-                                    onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
-                                    className="w-full mt-1 px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm"
-                                 />
-                             </div>
+                         {/* Profile summary from saved profile */}
+                         <div className="bg-stone-100 p-3 rounded-lg">
+                             <p className="text-xs text-stone-500 mb-1">Using your saved profile:</p>
+                             <p className="text-xs font-bold text-stone-900">
+                                 {profile.gender} · Size {profile.estimatedSize}
+                                 {profile.height ? ` · ${profile.height}` : ''}
+                                 {profile.shoeSize ? ` · Shoe ${profile.shoeSize}` : ''}
+                             </p>
                          </div>
                      </div>
                  )}
@@ -2026,9 +2045,359 @@ export default function App() {
     </div>
   );
 
+  // --- PROFILE SETUP PAGE ---
+  const handleProfilePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+          const base64 = reader.result as string;
+          setProfile(prev => ({ ...prev, profilePhotoBase64: base64 }));
+      };
+      reader.readAsDataURL(file);
+  };
+
+  const handleProfileAnalysis = async () => {
+      if (!profile.profilePhotoBase64) return;
+      setIsAnalyzingProfile(true);
+      try {
+          const result = await analyzeProfilePhoto(profile.profilePhotoBase64);
+          setProfile(prev => ({
+              ...prev,
+              ...result,
+              isProfileSetup: true,
+          }));
+      } catch (e) {
+          console.error("Profile analysis failed", e);
+      } finally {
+          setIsAnalyzingProfile(false);
+      }
+  };
+
+  const renderProfileSetup = () => (
+      <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+          <div className="text-center mb-8">
+              <div className="w-16 h-16 bg-stone-900 text-white rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <User size={28} />
+              </div>
+              <h1 className="text-2xl font-bold font-sans text-stone-900 mb-1">Physical Profile Setup</h1>
+              <p className="text-stone-500 text-sm">Upload a photo and we will analyze your physical attributes using AI</p>
+          </div>
+
+          {/* Photo Upload Area */}
+          <div className="mb-6">
+              <div className="relative aspect-[3/4] max-h-[350px] bg-stone-50 border-2 border-dashed border-stone-200 rounded-2xl overflow-hidden hover:bg-stone-100 transition-all group mx-auto">
+                  {profile.profilePhotoBase64 ? (
+                      <>
+                          <img src={profile.profilePhotoBase64} alt="Profile" className="w-full h-full object-cover" />
+                          <button 
+                              onClick={() => setProfile(p => ({...p, profilePhotoBase64: null}))}
+                              className="absolute top-3 right-3 bg-white/90 p-2 rounded-full shadow-sm text-stone-500 hover:text-red-500"
+                          >
+                              <X size={16} />
+                          </button>
+                      </>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
+                          <div className="bg-white p-4 rounded-full shadow-sm mb-3 group-hover:scale-110 transition-transform">
+                              <Camera size={28} className="text-stone-900" />
+                          </div>
+                          <span className="font-semibold text-stone-700 text-sm">Upload Full Body Photo</span>
+                          <span className="text-xs text-stone-400 mt-1">JPG, PNG, or HEIC</span>
+                          <input 
+                              type="file" 
+                              className="hidden" 
+                              accept="image/*"
+                              onChange={handleProfilePhotoUpload}
+                          />
+                      </label>
+                  )}
+              </div>
+          </div>
+
+          {/* Analyze Button */}
+          {profile.profilePhotoBase64 && !profile.isProfileSetup && (
+              <button 
+                  onClick={handleProfileAnalysis}
+                  disabled={isAnalyzingProfile}
+                  className={`w-full py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 mb-6 transition-all ${
+                      isAnalyzingProfile 
+                          ? 'bg-stone-200 text-stone-400 cursor-not-allowed' 
+                          : 'bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200'
+                  }`}
+              >
+                  {isAnalyzingProfile ? (
+                      <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Analyzing with Nano Banana Pro...
+                      </>
+                  ) : (
+                      <>
+                          <Sparkles size={16} />
+                          Analyze with AI
+                      </>
+                  )}
+              </button>
+          )}
+
+          {/* Results / Manual Input */}
+          {(profile.isProfileSetup || !profile.profilePhotoBase64) && (
+              <div className="space-y-4 animate-fade-in">
+                  <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-bold text-stone-900">
+                          {profile.isProfileSetup ? 'Detected Attributes' : 'Or enter manually'}
+                      </h3>
+                      {profile.isProfileSetup && (
+                          <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle2 size={10} /> AI Detected
+                          </span>
+                      )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Gender</label>
+                          <select 
+                              value={profile.gender}
+                              onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          >
+                              <option value="Female">Female</option>
+                              <option value="Male">Male</option>
+                              <option value="Non-binary">Non-binary</option>
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Age Range</label>
+                          <select 
+                              value={profile.age || ''}
+                              onChange={(e) => setProfile(p => ({...p, age: e.target.value}))}
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          >
+                              <option value="">Select</option>
+                              <option value="18-24">18-24</option>
+                              <option value="25-30">25-30</option>
+                              <option value="31-40">31-40</option>
+                              <option value="41-50">41-50</option>
+                              <option value="50+">50+</option>
+                          </select>
+                      </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Height</label>
+                          <input 
+                              type="text"
+                              value={profile.height || ''}
+                              onChange={(e) => setProfile(p => ({...p, height: e.target.value}))}
+                              placeholder="e.g. 165 cm"
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          />
+                      </div>
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Height Category</label>
+                          <select 
+                              value={profile.heightCategory || ''}
+                              onChange={(e) => setProfile(p => ({...p, heightCategory: e.target.value}))}
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          >
+                              <option value="">Select</option>
+                              <option value="Petite">Petite</option>
+                              <option value="Average">Average</option>
+                              <option value="Tall">Tall</option>
+                          </select>
+                      </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Clothing Size</label>
+                          <select 
+                              value={profile.estimatedSize}
+                              onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          >
+                              <option value="XS">XS</option>
+                              <option value="S">S</option>
+                              <option value="M">M</option>
+                              <option value="L">L</option>
+                              <option value="XL">XL</option>
+                              <option value="XXL">XXL</option>
+                          </select>
+                      </div>
+                      <div>
+                          <label className="text-xs font-medium text-stone-500 mb-1 block">Shoe Size</label>
+                          <input 
+                              type="text"
+                              value={profile.shoeSize || ''}
+                              onChange={(e) => setProfile(p => ({...p, shoeSize: e.target.value}))}
+                              placeholder="e.g. US 7"
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                          />
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          <button 
+              onClick={() => {
+                  setProfile(p => ({...p, isProfileSetup: true}));
+                  setStep(AppStep.PROFILE_VIEW);
+              }}
+              disabled={!profile.gender || !profile.estimatedSize}
+              className={`w-full mt-6 py-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                  (!profile.gender || !profile.estimatedSize) 
+                      ? 'bg-stone-100 text-stone-400 cursor-not-allowed' 
+                      : 'bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200'
+              }`}
+          >
+              <Save size={16} />
+              Save Profile
+          </button>
+      </div>
+  );
+
+  // --- PROFILE VIEW / EDIT PAGE ---
+  const renderProfileView = () => {
+      const fields = [
+          { label: 'Gender', value: profile.gender, key: 'gender', icon: <User size={16} /> },
+          { label: 'Age Range', value: profile.age || 'Not set', key: 'age', icon: <User size={16} /> },
+          { label: 'Height', value: profile.height || 'Not set', key: 'height', icon: <Ruler size={16} /> },
+          { label: 'Height Category', value: profile.heightCategory || 'Not set', key: 'heightCategory', icon: <Ruler size={16} /> },
+          { label: 'Clothing Size', value: profile.estimatedSize, key: 'estimatedSize', icon: <Layers size={16} /> },
+          { label: 'Shoe Size', value: profile.shoeSize || 'Not set', key: 'shoeSize', icon: <Footprints size={16} /> },
+      ];
+
+      return (
+          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+              {/* Profile Header */}
+              <div className="text-center mb-8">
+                  <div className="relative w-24 h-24 mx-auto mb-4">
+                      {profile.profilePhotoBase64 ? (
+                          <img src={profile.profilePhotoBase64} alt="Profile" className="w-24 h-24 rounded-full object-cover border-4 border-stone-100 shadow-lg" />
+                      ) : (
+                          <div className="w-24 h-24 rounded-full bg-stone-100 border-4 border-stone-200 flex items-center justify-center">
+                              <User size={32} className="text-stone-400" />
+                          </div>
+                      )}
+                      {profile.isProfileSetup && (
+                          <div className="absolute -bottom-1 -right-1 bg-green-500 text-white p-1 rounded-full">
+                              <Check size={12} />
+                          </div>
+                      )}
+                  </div>
+                  <h1 className="text-xl font-bold text-stone-900">My Profile</h1>
+                  <p className="text-xs text-stone-500 mt-1">
+                      {profile.isProfileSetup ? 'AI-analyzed physical profile' : 'Profile not yet analyzed'}
+                  </p>
+              </div>
+
+              {/* Profile Cards */}
+              <div className="space-y-3 mb-6">
+                  {fields.map((field) => (
+                      <div key={field.key} className="flex items-center justify-between bg-white p-4 rounded-xl border border-stone-100 shadow-sm">
+                          <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 bg-stone-50 rounded-lg flex items-center justify-center text-stone-500">
+                                  {field.icon}
+                              </div>
+                              <div>
+                                  <p className="text-[11px] font-medium text-stone-400 uppercase tracking-wide">{field.label}</p>
+                                  {isEditingProfile ? (
+                                      <input
+                                          type="text"
+                                          value={field.value === 'Not set' ? '' : field.value}
+                                          onChange={(e) => setProfile(p => ({...p, [field.key]: e.target.value}))}
+                                          className="text-sm font-bold text-stone-900 bg-stone-50 border border-stone-200 rounded-lg px-2 py-1 mt-0.5 outline-none focus:border-stone-900 w-full"
+                                      />
+                                  ) : (
+                                      <p className={`text-sm font-bold ${field.value === 'Not set' ? 'text-stone-300' : 'text-stone-900'}`}>
+                                          {field.value}
+                                      </p>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                  ))}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-3">
+                  <button
+                      onClick={() => setIsEditingProfile(!isEditingProfile)}
+                      className={`w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                          isEditingProfile 
+                              ? 'bg-green-600 text-white hover:bg-green-700' 
+                              : 'bg-white text-stone-700 border border-stone-200 hover:bg-stone-50'
+                      }`}
+                  >
+                      {isEditingProfile ? (
+                          <><Check size={16} /> Save Changes</>
+                      ) : (
+                          <><Edit2 size={16} /> Edit Profile</>
+                      )}
+                  </button>
+                  <button
+                      onClick={() => {
+                          setProfile(p => ({...p, profilePhotoBase64: null, isProfileSetup: false}));
+                          setIsEditingProfile(false);
+                          setStep(AppStep.PROFILE_SETUP);
+                      }}
+                      className="w-full py-3 rounded-xl font-bold text-sm bg-white text-stone-400 border border-stone-100 hover:bg-stone-50 flex items-center justify-center gap-2"
+                  >
+                      <Camera size={16} /> Re-Scan with New Photo
+                  </button>
+              </div>
+          </div>
+      );
+  };
+
+  // --- BOTTOM NAVIGATION BAR ---
+  const showBottomNav = step !== AppStep.SEARCHING;
+  const isProfilePage = step === AppStep.PROFILE_SETUP || step === AppStep.PROFILE_VIEW;
+  const isHomePage = !isProfilePage;
+
+  const BottomNav = () => (
+      <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 z-40">
+          <div className="max-w-md mx-auto flex items-center justify-around py-2 pb-6">
+              <button 
+                  onClick={() => {
+                      if (!isHomePage) {
+                          setStep(previousStep === AppStep.PROFILE_SETUP || previousStep === AppStep.PROFILE_VIEW ? AppStep.GOAL_SELECTION : previousStep);
+                      }
+                  }}
+                  className={`flex flex-col items-center gap-0.5 px-6 py-1.5 rounded-xl transition-all ${
+                      isHomePage ? 'text-stone-900' : 'text-stone-400 hover:text-stone-600'
+                  }`}
+              >
+                  <Home size={22} strokeWidth={isHomePage ? 2.5 : 1.5} />
+                  <span className={`text-[10px] ${isHomePage ? 'font-bold' : 'font-medium'}`}>Home</span>
+              </button>
+              <button 
+                  onClick={() => {
+                      if (!isProfilePage) {
+                          setPreviousStep(step);
+                          setStep(profile.isProfileSetup ? AppStep.PROFILE_VIEW : AppStep.PROFILE_SETUP);
+                      }
+                  }}
+                  className={`flex flex-col items-center gap-0.5 px-6 py-1.5 rounded-xl transition-all relative ${
+                      isProfilePage ? 'text-stone-900' : 'text-stone-400 hover:text-stone-600'
+                  }`}
+              >
+                  <User size={22} strokeWidth={isProfilePage ? 2.5 : 1.5} />
+                  <span className={`text-[10px] ${isProfilePage ? 'font-bold' : 'font-medium'}`}>Profile</span>
+                  {!profile.isProfileSetup && (
+                      <div className="absolute top-0.5 right-4 w-2 h-2 bg-red-500 rounded-full" />
+                  )}
+              </button>
+          </div>
+      </div>
+  );
+
   return (
     <div className="min-h-screen bg-white text-stone-900 font-sans selection:bg-stone-200">
-        <main className="min-h-screen">
+        <main className="min-h-screen pb-20">
             {step === AppStep.GOAL_SELECTION && renderLanding()}
             {step === AppStep.ITEM_TYPE && renderItemType()}
             {step === AppStep.UPLOAD_PHOTO && renderUploadPhoto()}
@@ -2049,8 +2418,14 @@ export default function App() {
             {step === AppStep.COLOR && renderColor()}
             {step === AppStep.PRICE_RANGE && renderPriceRange()}
             {(step === AppStep.SEARCHING || step === AppStep.RESULTS) && renderResults()}
+            {/* Profile Pages */}
+            {step === AppStep.PROFILE_SETUP && renderProfileSetup()}
+            {step === AppStep.PROFILE_VIEW && renderProfileView()}
         </main>
         
+        {/* Bottom Navigation */}
+        {showBottomNav && <BottomNav />}
+
         {step === AppStep.SEARCHING && (
              <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-center p-6">
                  <div className="w-16 h-16 border-4 border-stone-100 border-t-stone-900 rounded-full animate-spin mb-8"></div>

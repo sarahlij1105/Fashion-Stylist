@@ -66,6 +66,77 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
   return { mimeType: 'image/jpeg', data: dataUrl };
 };
 
+// --- PROFILE ANALYZER (Nano Banana Pro / Gemini 3 Pro) ---
+export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<UserProfile>> => {
+    try {
+        const { mimeType, data } = parseDataUrl(dataUrl);
+
+        const prompt = `
+        You are a physical profile analyzer for a fashion app.
+        Analyze the person in this photo and return a detailed physical profile.
+
+        **Your Tasks:**
+        1. **Gender:** Detect the person's gender (Female / Male / Non-binary)
+        2. **Age Range:** Estimate an age range (e.g., "18-24", "25-30", "31-40", "41-50", "50+")
+        3. **Height Category:** Based on proportions, classify as: "Petite" (under 5'3" / 160cm), "Average" (5'3"-5'7" / 160-170cm), "Tall" (over 5'7" / 170cm)
+        4. **Estimated Height:** Give a specific estimate (e.g., "165 cm" or "5'5\"")
+        5. **Clothing Size:** Estimate standard clothing size: XS, S, M, L, XL, XXL
+        6. **Shoe Size:** Estimate shoe size based on height/proportions (e.g., "US 7", "US 9")
+
+        **Output Schema (Strict JSON):**
+        \`\`\`json
+        {
+          "gender": "Female" | "Male" | "Non-binary",
+          "age": "25-30",
+          "heightCategory": "Average",
+          "height": "165 cm",
+          "estimatedSize": "M",
+          "shoeSize": "US 7",
+          "confidence": "high" | "medium" | "low"
+        }
+        \`\`\`
+
+        Be practical and give your best estimate. If the image quality is poor, still give estimates with "low" confidence.
+        `;
+
+        const response = await generateContentWithRetry(
+            'gemini-3-pro-preview',
+            {
+                contents: {
+                    parts: [
+                        { inlineData: { mimeType, data } },
+                        { text: prompt }
+                    ]
+                },
+                config: {
+                    responseMimeType: 'application/json'
+                }
+            }
+        );
+
+        const text = response.text || "{}";
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch (e) {
+            console.error("Profile Analyzer JSON Parse Error", e);
+            return {};
+        }
+
+        return {
+            gender: parsed.gender || 'Female',
+            age: parsed.age || '',
+            heightCategory: parsed.heightCategory || '',
+            height: parsed.height || '',
+            estimatedSize: parsed.estimatedSize || 'M',
+            shoeSize: parsed.shoeSize || '',
+        };
+    } catch (error) {
+        console.error("Profile Analyzer Error:", error);
+        return {};
+    }
+};
+
 // --- AGENT 1: The Vision Analyst ---
 export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose, height?: string): Promise<Partial<UserProfile>> => {
   try {
