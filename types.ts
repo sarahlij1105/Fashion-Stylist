@@ -1,12 +1,17 @@
 export enum AppStep {
   GOAL_SELECTION = 'GOAL_SELECTION',
+  PROFILE_MANUAL = 'PROFILE_MANUAL', // New step for manual profile entry (no photo)
   UPLOAD_PHOTO = 'UPLOAD_PHOTO',
   ITEM_TYPE = 'ITEM_TYPE',
   OCCASION = 'OCCASION',
   STYLE = 'STYLE',
   COLOR = 'COLOR',
   CONFIRMATION = 'CONFIRMATION', // New step for verifying AI analysis
-  PRICE_RANGE = 'PRICE_RANGE',
+  PREFERENCES_DASHBOARD = 'PREFERENCES_DASHBOARD', // Replaces OCCASION, STYLE, COLOR, PRICE_RANGE
+  OCCASION = 'OCCASION', // Deprecated but kept for type safety if needed
+  STYLE = 'STYLE', // Deprecated
+  COLOR = 'COLOR', // Deprecated
+  PRICE_RANGE = 'PRICE_RANGE', // Deprecated
   // DELIVERY step removed
   IDEAL_STYLE = 'IDEAL_STYLE',
   SEARCHING = 'SEARCHING',
@@ -20,6 +25,8 @@ export enum FashionPurpose {
 
 export interface UserProfile {
   gender: string;
+  height?: string; // e.g. "165 cm" or "5'6\""
+  shoeSize?: string; // e.g. "US 7"
   estimatedSize: string;
   currentStyle: string;
   keptItems?: string[]; // Inventory detected from photo for Path A

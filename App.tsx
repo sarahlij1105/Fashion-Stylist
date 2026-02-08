@@ -1,38 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
-import { analyzeUserPhoto, searchAndRecommend } from './services/geminiService';
-import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle } from 'lucide-react';
+import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 
-const DefaultProfile: UserProfile = {
-  gender: 'Female',
-  estimatedSize: 'M',
-  currentStyle: '',
-  keptItems: [],
-  userImageBase64: null,
-  idealStyleImages: [],
-};
-
-const DefaultPreferences: Preferences = {
-  purpose: FashionPurpose.NEW_OUTFIT,
-  occasion: '',
-  stylePreference: '',
-  colors: '',
-  priceRange: '$50 - $200',
-  location: 'New York, USA',
-  itemType: '',
-};
+// ... (imports)
 
 const WIZARD_STEPS = [
-  AppStep.GOAL_SELECTION,
-  AppStep.UPLOAD_PHOTO,
-  AppStep.ITEM_TYPE,
-  AppStep.IDEAL_STYLE, // Moved up
-  AppStep.CONFIRMATION, // Moved up
-  AppStep.OCCASION,
-  AppStep.STYLE,
-  AppStep.COLOR,
-  AppStep.PRICE_RANGE,
+  AppStep.GOAL_SELECTION, // Will become LANDING
+  AppStep.ITEM_TYPE, 
+  AppStep.UPLOAD_PHOTO, 
+  AppStep.PROFILE_MANUAL, 
+  AppStep.IDEAL_STYLE, 
+  AppStep.CONFIRMATION, 
+  AppStep.PREFERENCES_DASHBOARD, // New consolidated step
+  AppStep.SEARCHING,
+  AppStep.RESULTS,
 ];
 
 interface NavigationButtonsProps {
@@ -86,17 +65,53 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ currentStep }) => {
 };
 
 export default function App() {
-  const [step, setStep] = useState<AppStep>(AppStep.GOAL_SELECTION);
-  const [profile, setProfile] = useState<UserProfile>(DefaultProfile);
-  const [preferences, setPreferences] = useState<Preferences>(DefaultPreferences);
-  const [isLoading, setIsLoading] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [styleAnalysisResults, setStyleAnalysisResults] = useState<StyleAnalysisResult | null>(null);
+  // ... (state)
+  const [searchQuery, setSearchQuery] = useState(''); // For Landing & Refinement
 
-  const [selectedItemTypes, setSelectedItemTypes] = useState<string[]>([]);
-  const [customItemType, setCustomItemType] = useState<string>('');
-  const [minPrice, setMinPrice] = useState<number | string>(210);
-  const [maxPrice, setMaxPrice] = useState<number | string>(1000);
+  // ... (effects)
+
+  // --- NEW: Landing Page Logic ---
+  const handleSmartEntry = async () => {
+      if (!searchQuery.trim()) return;
+      setIsLoading(true);
+      try {
+          const extracted = await analyzeUserIntent(searchQuery);
+          setPreferences(prev => ({ ...prev, ...extracted }));
+          
+          // Determine next step based on extraction
+          // If items found, maybe skip to Dashboard? 
+          // For now, let's go to Dashboard directly as "Smart Start"
+          setStep(AppStep.PREFERENCES_DASHBOARD);
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  // --- NEW: Refinement Logic ---
+  const handleRefinement = async () => {
+      if (!searchQuery.trim()) return;
+      setIsLoading(true);
+      try {
+          const newPrefs = await refinePreferences(preferences, searchQuery);
+          setPreferences(newPrefs);
+          setSearchQuery(''); // Clear input
+          handleSearch(); // Re-run search
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+    // Helper to check if any clothing item is selected
+  const hasClothingSelected = () => {
+      const clothingTypes = ["Dress", "Top", "Bottom", "Outerwear"];
+      return selectedItemTypes.some(t => clothingTypes.includes(t));
+  };
+
+  const hasShoesSelected = () => selectedItemTypes.includes("Shoes");
 
   useEffect(() => {
     // Mount effect
@@ -216,6 +231,29 @@ export default function App() {
   const nextStep = async () => {
     const currentIndex = WIZARD_STEPS.indexOf(step);
     
+    // BRANCHING LOGIC: After ITEM_TYPE
+    if (step === AppStep.ITEM_TYPE) {
+        if (hasClothingSelected()) {
+            setStep(AppStep.UPLOAD_PHOTO);
+        } else {
+            setStep(AppStep.PROFILE_MANUAL);
+        }
+        return;
+    }
+
+    // BRANCHING LOGIC: After UPLOAD_PHOTO (Vision Analyst)
+    if (step === AppStep.UPLOAD_PHOTO) {
+        // Proceed to Ideal Style
+        setStep(AppStep.IDEAL_STYLE);
+        return;
+    }
+
+    // BRANCHING LOGIC: After PROFILE_MANUAL
+    if (step === AppStep.PROFILE_MANUAL) {
+        setStep(AppStep.IDEAL_STYLE);
+        return;
+    }
+    
     // NEW: Intercept transition after IDEAL_STYLE to run Analyzer
     if (step === AppStep.IDEAL_STYLE) {
         if (profile.idealStyleImages.length > 0) {
@@ -230,19 +268,19 @@ export default function App() {
                     setStep(AppStep.CONFIRMATION);
                 } else {
                     // Fallback if skipped or error
-                     setStep(AppStep.OCCASION);
+                     setStep(AppStep.PREFERENCES_DASHBOARD);
                 }
             } catch (e) {
                 console.error("Analyzer error", e);
                 // Proceed without analysis
-                setStep(AppStep.OCCASION);
+                setStep(AppStep.PREFERENCES_DASHBOARD);
             } finally {
                 setIsLoading(false);
             }
             return;
         } else {
              // No images, skip Confirmation and go to Manual Path
-             setStep(AppStep.OCCASION);
+             setStep(AppStep.PREFERENCES_DASHBOARD);
              return;
         }
     }
@@ -263,32 +301,49 @@ export default function App() {
                occasion: prev.occasion || "General" 
            }));
        }
-       // Skip Occasion/Style/Color -> Jump to Price Range
-       setStep(AppStep.PRICE_RANGE);
+       // Skip Occasion/Style/Color -> Jump to Dashboard
+       setStep(AppStep.PREFERENCES_DASHBOARD);
        return;
     }
 
     if (currentIndex >= 0 && currentIndex < WIZARD_STEPS.length - 1) {
       setStep(WIZARD_STEPS[currentIndex + 1]);
-    } else if (step === AppStep.PRICE_RANGE) {
+    } else if (step === AppStep.PREFERENCES_DASHBOARD) {
       handleSearch();
     }
   };
 
   const prevStep = () => {
     // Custom Back Logic for Branching
-    if (step === AppStep.OCCASION) {
-        // Occasion comes after Ideal Style (Manual Path)
-        setStep(AppStep.IDEAL_STYLE);
+    
+    // From UPLOAD_PHOTO -> back to ITEM_TYPE
+    if (step === AppStep.UPLOAD_PHOTO) {
+        setStep(AppStep.ITEM_TYPE);
         return;
     }
 
-    if (step === AppStep.PRICE_RANGE) {
-        // Price Range comes from EITHER Confirmation OR Color
+    // From PROFILE_MANUAL -> back to ITEM_TYPE
+    if (step === AppStep.PROFILE_MANUAL) {
+        setStep(AppStep.ITEM_TYPE);
+        return;
+    }
+
+    // From IDEAL_STYLE -> back to UPLOAD_PHOTO or PROFILE_MANUAL
+    if (step === AppStep.IDEAL_STYLE) {
+        if (hasClothingSelected()) {
+            setStep(AppStep.UPLOAD_PHOTO);
+        } else {
+            setStep(AppStep.PROFILE_MANUAL);
+        }
+        return;
+    }
+
+    if (step === AppStep.PREFERENCES_DASHBOARD) {
+        // Dashboard comes from Confirmation (if analyzed) or Ideal Style (if skipped)
         if (styleAnalysisResults && profile.idealStyleImages.length > 0) {
             setStep(AppStep.CONFIRMATION);
         } else {
-            setStep(AppStep.COLOR);
+            setStep(AppStep.IDEAL_STYLE);
         }
         return;
     }
@@ -307,47 +362,162 @@ export default function App() {
 
   // --- Render Steps ---
 
-  const renderGoalSelection = () => (
-    <div className="max-w-md mx-auto px-6 pt-8 animate-fade-in pb-32">
-       <h1 className="text-3xl font-bold font-sans text-stone-900 mb-2">What would you like to do today?</h1>
-       <p className="text-stone-500 mb-8">Choose your fashion goal</p>
+  const renderLanding = () => (
+    <div className="max-w-md mx-auto px-6 pt-12 animate-fade-in pb-32">
+       <h1 className="text-4xl font-bold font-serif text-stone-900 mb-2 text-center">Elite Stylist</h1>
+       <p className="text-stone-500 mb-8 text-center">Your AI personal shopper</p>
 
-       <div className="space-y-4">
-          {[FashionPurpose.MATCHING, FashionPurpose.NEW_OUTFIT].map((purpose) => {
-             const isSelected = preferences.purpose === purpose;
-             const isMatching = purpose === FashionPurpose.MATCHING;
-             return (
-                 <button
-                   key={purpose}
-                   onClick={() => setPreferences(p => ({ ...p, purpose }))}
-                   className={`w-full text-left p-6 rounded-2xl border transition-all group ${isSelected ? 'border-stone-900 bg-stone-50 ring-1 ring-stone-900 shadow-sm' : 'border-stone-200 bg-white hover:border-stone-900 hover:shadow-md'}`}
-                 >
-                    <div className="flex justify-between items-start">
-                        <h3 className="text-lg font-bold text-stone-900 mb-1 group-hover:text-stone-900">{purpose}</h3>
-                        {isMatching && <span className="bg-stone-200 text-stone-700 text-[10px] uppercase font-bold px-2 py-0.5 rounded">Path A</span>}
-                        {!isMatching && <span className="bg-stone-900 text-white text-[10px] uppercase font-bold px-2 py-0.5 rounded">Path B</span>}
-                    </div>
-                    <p className="text-stone-500 text-sm leading-relaxed mt-1">
-                      {isMatching
-                        ? "Inventory Mode: Keep items from your photo and find new pieces to bridge the look."
-                        : "Mannequin Mode: Disregard current clothes. Build a fresh look from scratch."}
-                    </p>
-                 </button>
-             );
-          })}
+       {/* Search Box */}
+       <div className="relative mb-8">
+           <input 
+             type="text"
+             value={searchQuery}
+             onChange={(e) => setSearchQuery(e.target.value)}
+             placeholder="What are you looking for? (e.g. Wedding guest dress)"
+             className="w-full p-4 pr-12 bg-white border border-stone-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-stone-900 transition-all"
+             onKeyDown={(e) => e.key === 'Enter' && handleSmartEntry()}
+           />
+           <button 
+             onClick={handleSmartEntry}
+             className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors"
+           >
+             <Search size={18} />
+           </button>
        </div>
 
-       <NavigationButtons onContinue={nextStep} showBack={false} onBack={prevStep} />
+       <div className="grid grid-cols-1 gap-4">
+          {/* Card 1: Style Clone */}
+          <button
+             onClick={() => {
+                 setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING})); // Or new purpose
+                 setStep(AppStep.UPLOAD_PHOTO); // Jump to Vision
+             }}
+             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
+          >
+             <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center shrink-0">
+                 <Camera size={24} />
+             </div>
+             <div>
+                 <h3 className="font-bold text-stone-900">Show me this style</h3>
+                 <p className="text-xs text-stone-500">Upload a photo to find similar items</p>
+             </div>
+          </button>
+
+          {/* Card 2: Match Item */}
+          <button
+             onClick={() => {
+                 setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING}));
+                 setStep(AppStep.ITEM_TYPE);
+             }}
+             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
+          >
+             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center shrink-0">
+                 <Layers size={24} />
+             </div>
+             <div>
+                 <h3 className="font-bold text-stone-900">Find items to match</h3>
+                 <p className="text-xs text-stone-500">Complete an outfit you already own</p>
+             </div>
+          </button>
+
+          {/* Card 3: Create Outfit (Manual) */}
+          <button
+             onClick={() => {
+                 setPreferences(p => ({...p, purpose: FashionPurpose.NEW_OUTFIT}));
+                 setStep(AppStep.ITEM_TYPE); // Start standard flow
+             }}
+             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
+          >
+             <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center shrink-0">
+                 <Sparkles size={24} />
+             </div>
+             <div>
+                 <h3 className="font-bold text-stone-900">Create complete outfit</h3>
+                 <p className="text-xs text-stone-500">Start from scratch with guided steps</p>
+             </div>
+          </button>
+       </div>
     </div>
   );
 
+  const renderPreferencesDashboard = () => (
+      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <ProgressBar currentStep={step} />
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-6">Your Preferences</h1>
+          
+          <div className="space-y-4">
+              {/* Occasion */}
+              <div className="bg-white p-4 rounded-xl border border-stone-200">
+                  <label className="text-xs font-bold text-stone-500 uppercase">Occasion</label>
+                  <input 
+                      value={preferences.occasion}
+                      onChange={(e) => setPreferences(p => ({...p, occasion: e.target.value}))}
+                      className="w-full mt-1 font-medium outline-none border-b border-transparent focus:border-stone-900"
+                      placeholder="e.g. Wedding, Work..."
+                  />
+              </div>
+
+              {/* Style */}
+              <div className="bg-white p-4 rounded-xl border border-stone-200">
+                  <label className="text-xs font-bold text-stone-500 uppercase">Style / Vibe</label>
+                  <input 
+                      value={preferences.stylePreference}
+                      onChange={(e) => setPreferences(p => ({...p, stylePreference: e.target.value}))}
+                      className="w-full mt-1 font-medium outline-none border-b border-transparent focus:border-stone-900"
+                      placeholder="e.g. Boho, Minimalist..."
+                  />
+              </div>
+
+              {/* Colors */}
+              <div className="bg-white p-4 rounded-xl border border-stone-200">
+                  <label className="text-xs font-bold text-stone-500 uppercase">Colors</label>
+                  <input 
+                      value={preferences.colors}
+                      onChange={(e) => setPreferences(p => ({...p, colors: e.target.value}))}
+                      className="w-full mt-1 font-medium outline-none border-b border-transparent focus:border-stone-900"
+                      placeholder="e.g. Earth tones, Black..."
+                  />
+              </div>
+
+              {/* Budget */}
+              <div className="bg-white p-4 rounded-xl border border-stone-200">
+                  <label className="text-xs font-bold text-stone-500 uppercase">Budget</label>
+                  <input 
+                      value={preferences.priceRange}
+                      onChange={(e) => setPreferences(p => ({...p, priceRange: e.target.value}))}
+                      className="w-full mt-1 font-medium outline-none border-b border-transparent focus:border-stone-900"
+                      placeholder="$50 - $200"
+                  />
+              </div>
+          </div>
+
+          <NavigationButtons 
+            onContinue={() => handleSearch()} 
+            onBack={() => setStep(AppStep.GOAL_SELECTION)}
+            continueLabel="Find Outfits"
+          />
+      </div>
+  );
+
+  // ... (Update renderResults to include chat)
+
+
   const renderUploadPhoto = () => {
     const isHeic = profile.userImageBase64?.toLowerCase().includes('image/heic') || profile.userImageBase64?.toLowerCase().includes('image/heif');
+    const [heightVal, setHeightVal] = useState('');
+    const [heightUnit, setHeightUnit] = useState('cm');
+
+    // Update profile height when inputs change
+    useEffect(() => {
+        if (heightVal) {
+            setProfile(p => ({...p, height: `${heightVal} ${heightUnit}`}));
+        }
+    }, [heightVal, heightUnit]);
 
     return (
     <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-      <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Upload Your Photo</h1>
-      <p className="text-stone-500 mb-6 text-sm">Nano Banana will analyze your silhouette and inventory</p>
+      <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Vision Analyst</h1>
+      <p className="text-stone-500 mb-6 text-sm">Upload a full-body photo for size estimation</p>
 
       <div className="bg-stone-100 rounded-3xl p-4 relative mb-6 min-h-[300px] flex items-center justify-center border-2 border-dashed border-stone-200 overflow-hidden">
          {profile.userImageBase64 ? (
@@ -399,65 +569,138 @@ export default function App() {
          )}
       </div>
 
-      <div className="bg-stone-50 p-6 rounded-3xl space-y-4">
-        <h3 className="text-stone-500 text-sm font-medium">Nano Banana Analysis</h3>
-        
-        <div>
-           <label className="block text-sm font-bold text-stone-900 mb-1.5">Gender</label>
-           <select 
-               value={profile.gender}
-               onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
-               className="w-full p-4 bg-white border border-stone-200 rounded-xl appearance-none font-medium focus:ring-1 focus:ring-stone-900 outline-none"
-             >
-               <option>Female</option>
-               <option>Male</option>
-               <option>Non-Binary</option>
-             </select>
-        </div>
-
-        <div>
-           <label className="block text-sm font-bold text-stone-900 mb-1.5">Size</label>
-           <select 
-               value={profile.estimatedSize}
-               onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
-               className="w-full p-4 bg-white border border-stone-200 rounded-xl appearance-none font-medium focus:ring-1 focus:ring-stone-900 outline-none"
-             >
-               <option>XS</option>
-               <option>S</option>
-               <option>M</option>
-               <option>L</option>
-               <option>XL</option>
-               <option>XXL</option>
-             </select>
-        </div>
-
-        {profile.keptItems && profile.keptItems.length > 0 && (
-             <div className="pt-2">
-                <label className="flex items-center justify-between text-sm font-bold text-stone-900 mb-1.5">
-                    <span>Detected Inventory (Kept Items)</span>
-                    <span className="text-[10px] font-normal text-stone-400 uppercase tracking-wide">Tap 'X' to remove</span>
-                </label>
-                <div className="flex flex-wrap gap-2">
-                    {profile.keptItems.map((item, idx) => (
-                        <div key={idx} className="flex items-center gap-1.5 text-xs bg-white text-stone-700 pl-3 pr-1.5 py-1.5 rounded-lg font-medium border border-stone-200 shadow-sm hover:border-red-200 hover:bg-red-50 transition-all group">
-                            {item}
-                            <button 
-                                onClick={() => removeKeptItem(idx)}
-                                className="p-0.5 hover:bg-red-100 rounded-md text-stone-400 group-hover:text-red-500 transition-colors"
-                                title="Remove item"
-                            >
-                                <X size={12} />
-                            </button>
-                        </div>
-                    ))}
-                </div>
+      <div className="space-y-4">
+          <div>
+             <label className="block text-sm font-bold text-stone-900 mb-1.5">Your Height</label>
+             <div className="flex gap-2">
+                 <input 
+                    type="number" 
+                    value={heightVal}
+                    onChange={(e) => setHeightVal(e.target.value)}
+                    placeholder={heightUnit === 'cm' ? "165" : "5.5"}
+                    className="flex-1 p-4 bg-white border border-stone-200 rounded-xl outline-none focus:ring-1 focus:ring-stone-900"
+                 />
+                 <select 
+                    value={heightUnit}
+                    onChange={(e) => setHeightUnit(e.target.value)}
+                    className="p-4 bg-white border border-stone-200 rounded-xl outline-none"
+                 >
+                     <option value="cm">cm</option>
+                     <option value="ft">ft</option>
+                 </select>
              </div>
-        )}
+          </div>
       </div>
 
-      <NavigationButtons onContinue={nextStep} onBack={prevStep} />
+      {profile.estimatedSize && (
+          <div className="bg-stone-50 p-6 rounded-3xl space-y-4 mt-6 animate-fade-in">
+            <h3 className="text-stone-500 text-sm font-medium">Analysis Results</h3>
+            
+            <div className="flex gap-4">
+                <div className="flex-1">
+                   <label className="block text-xs font-bold text-stone-900 mb-1">Est. Size</label>
+                   <div className="p-3 bg-white border border-stone-200 rounded-xl font-bold text-center">
+                       {profile.estimatedSize}
+                   </div>
+                </div>
+                <div className="flex-1">
+                   <label className="block text-xs font-bold text-stone-900 mb-1">Gender</label>
+                   <div className="p-3 bg-white border border-stone-200 rounded-xl font-bold text-center">
+                       {profile.gender}
+                   </div>
+                </div>
+            </div>
+
+            {hasShoesSelected() && (
+                <div>
+                   <label className="block text-sm font-bold text-stone-900 mb-1.5">Select Shoe Size (US)</label>
+                   <select 
+                       value={profile.shoeSize || ''}
+                       onChange={(e) => setProfile(p => ({...p, shoeSize: e.target.value}))}
+                       className="w-full p-4 bg-white border border-stone-200 rounded-xl appearance-none font-medium focus:ring-1 focus:ring-stone-900 outline-none"
+                     >
+                       <option value="">Select Size</option>
+                       {profile.gender === 'Male' || profile.gender === "Men's" ? (
+                           [6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(s => <option key={s} value={`US ${s}`}>{s}</option>)
+                       ) : (
+                           [4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => <option key={s} value={`US ${s}`}>{s}</option>)
+                       )}
+                     </select>
+                </div>
+            )}
+
+            {profile.keptItems && profile.keptItems.length > 0 && (
+                 <div className="pt-2">
+                    <label className="flex items-center justify-between text-sm font-bold text-stone-900 mb-1.5">
+                        <span>Detected Inventory</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                        {profile.keptItems.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-1.5 text-xs bg-white text-stone-700 pl-3 pr-1.5 py-1.5 rounded-lg font-medium border border-stone-200 shadow-sm">
+                                {item}
+                                <button onClick={() => removeKeptItem(idx)} className="p-0.5 hover:bg-red-100 rounded-md text-stone-400"><X size={12} /></button>
+                            </div>
+                        ))}
+                    </div>
+                 </div>
+            )}
+          </div>
+      )}
+
+      <NavigationButtons onContinue={nextStep} onBack={prevStep} disabled={!profile.userImageBase64 || !heightVal} />
     </div>
-  );
+    );
+  };
+
+  const renderProfileManual = () => {
+      return (
+        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <ProgressBar currentStep={step} />
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Your Profile</h1>
+          <p className="text-stone-500 mb-8 text-sm">Tell us a bit about yourself</p>
+
+          <div className="space-y-6">
+            <div>
+               <label className="block text-sm font-bold text-stone-900 mb-1.5">Gender</label>
+               <div className="grid grid-cols-3 gap-3">
+                   {['Female', 'Male', 'Non-Binary'].map(g => (
+                       <button
+                         key={g}
+                         onClick={() => setProfile(p => ({...p, gender: g}))}
+                         className={`p-4 rounded-xl border font-medium transition-all ${profile.gender === g ? 'bg-stone-900 text-white border-stone-900' : 'bg-white border-stone-200 text-stone-900 hover:border-stone-300'}`}
+                       >
+                           {g}
+                       </button>
+                   ))}
+               </div>
+            </div>
+
+            {hasShoesSelected() && profile.gender && (
+                <div className="animate-fade-in">
+                   <label className="block text-sm font-bold text-stone-900 mb-1.5">Shoe Size (US)</label>
+                   <select 
+                       value={profile.shoeSize || ''}
+                       onChange={(e) => setProfile(p => ({...p, shoeSize: e.target.value}))}
+                       className="w-full p-4 bg-white border border-stone-200 rounded-xl appearance-none font-medium focus:ring-1 focus:ring-stone-900 outline-none"
+                     >
+                       <option value="">Select Size</option>
+                       {profile.gender === 'Male' ? (
+                           [6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(s => <option key={s} value={`US ${s}`}>{s}</option>)
+                       ) : (
+                           [4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => <option key={s} value={`US ${s}`}>{s}</option>)
+                       )}
+                     </select>
+                </div>
+            )}
+          </div>
+
+          <NavigationButtons 
+            onContinue={nextStep} 
+            onBack={prevStep} 
+            disabled={!profile.gender || (hasShoesSelected() && !profile.shoeSize)} 
+          />
+        </div>
+      );
   };
 
   const renderItemType = () => {
@@ -1058,7 +1301,7 @@ export default function App() {
           <div className="flex items-center justify-between pb-4">
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => setStep(AppStep.PRICE_RANGE)}
+                onClick={() => setStep(AppStep.PREFERENCES_DASHBOARD)}
                 className="p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
               >
                 <ArrowLeft size={20} />
@@ -1072,6 +1315,27 @@ export default function App() {
 
               return (
                   <div key={idx} className="space-y-6 animate-fade-in">
+                      {/* Chat Refinement Box */}
+                      <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm">
+                          <label className="text-xs font-bold text-stone-500 uppercase mb-2 block">Refine Results</label>
+                          <div className="flex gap-2">
+                              <input 
+                                  type="text"
+                                  value={searchQuery}
+                                  onChange={(e) => setSearchQuery(e.target.value)}
+                                  placeholder="e.g. 'Make it cheaper' or 'Show me red'"
+                                  className="flex-1 p-3 bg-stone-50 rounded-lg outline-none focus:ring-1 focus:ring-stone-900"
+                                  onKeyDown={(e) => e.key === 'Enter' && handleRefinement()}
+                              />
+                              <button 
+                                  onClick={handleRefinement}
+                                  className="p-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800"
+                              >
+                                  <Sparkles size={18} />
+                              </button>
+                          </div>
+                      </div>
+
                       <div className="bg-stone-900 text-stone-50 p-6 rounded-2xl shadow-lg">
                           <h3 className="text-xs uppercase tracking-widest font-semibold text-stone-400 mb-2 flex items-center gap-2">
                              <ShieldCheck size={14}/> Forensic Audit Log
@@ -1167,12 +1431,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white text-stone-900 font-sans selection:bg-stone-200">
         <main className="min-h-screen">
-            {step === AppStep.GOAL_SELECTION && renderGoalSelection()}
-            {step === AppStep.UPLOAD_PHOTO && renderUploadPhoto()}
+            {step === AppStep.GOAL_SELECTION && renderLanding()}
             {step === AppStep.ITEM_TYPE && renderItemType()}
+            {step === AppStep.UPLOAD_PHOTO && renderUploadPhoto()}
+            {step === AppStep.PROFILE_MANUAL && renderProfileManual()}
             {/* New Order: Ideal Style -> Confirmation -> (Maybe Skip) -> Occasion... */}
             {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
             {step === AppStep.CONFIRMATION && renderConfirmation()}
+            {step === AppStep.PREFERENCES_DASHBOARD && renderPreferencesDashboard()}
             {step === AppStep.OCCASION && renderOccasion()}
             {step === AppStep.STYLE && renderStyle()}
             {step === AppStep.COLOR && renderColor()}

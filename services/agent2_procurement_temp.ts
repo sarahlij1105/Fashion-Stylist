@@ -20,10 +20,10 @@ export const runCategoryMicroAgent = async (
 ): Promise<{ category: string, items: any[], rawResponse: string, searchCriteria: string, initialCandidateCount: number, debugLogs?: string[] }> => {
     
     // --- SETUP: EXTRACT SEARCH CRITERIA ---
-    // User requested: Strict Search Criteria = gender (implicit in category usually) + size + category + color + style.
-    // AND: Do NOT use the detailed 'vibe tags' for this strict search to avoid over-filtering.
+    // The Style Analyzer now returns `detailDataset` with `basics` and `details`.
+    // We use `basics` for the strict search criteria.
     
-    // 1. Sanitize Colors (Fix: Ensure "Shoes: Red" doesn't contaminate "Dress" search)
+    // 1. Sanitize Colors
     let searchColors = preferences.colors; 
     
     if (styleAnalysis?.detectedColors && styleAnalysis.detectedColors.length > 0) {
@@ -32,14 +32,12 @@ export const runCategoryMicroAgent = async (
         
         styleAnalysis.detectedColors.forEach(c => {
             if (c.includes(':')) {
-                // Handle "Category: Color" format
                 const [catPrefix, colorVal] = c.split(':').map(s => s.trim());
-                // Fuzzy match: if "Dress" is requested, allow "Dress: Black" or "Maxi Dress: Black"
                 if (catPrefix.toLowerCase().includes(currentCategory) || currentCategory.includes(catPrefix.toLowerCase())) {
                     validColors.push(colorVal);
                 }
             } else {
-                validColors.push(c); // General color applies to everything
+                validColors.push(c);
             }
         });
         
@@ -48,23 +46,52 @@ export const runCategoryMicroAgent = async (
         }
     }
 
-    // 2. Base Search Context
-    // Fix: stylePreference might be "Style1 OR Style2". This is valid for Google Search.
-    // We construct the query components carefully.
-    
+    // 2. Extract Basics for Search Criteria
+    // If styleAnalysis has detailDataset, try to find basics for this category
+    let basicsKeywords = "";
+    if (styleAnalysis?.detailDataset) {
+        // Map category to the key in detailDataset (e.g. "Dress" -> "dresses")
+        // The analyzer output schema uses keys like "tops", "bottoms", "dresses"
+        // We need a simple mapper or fuzzy match
+        const catKey = Object.keys(styleAnalysis.detailDataset).find(k => k.toLowerCase().includes(category.toLowerCase()) || category.toLowerCase().includes(k.toLowerCase()));
+        
+        if (catKey && styleAnalysis.detailDataset[catKey]) {
+            const catData = styleAnalysis.detailDataset[catKey];
+            // Collect all values from the "basics" object if it exists, or just flat values
+            // The analyzer returns a flat object for the category with keys like "types", "sleeves", etc.
+            // We join them with OR logic where appropriate, but for search string we just list them.
+            // Wait, user asked for OR logic for features from different photos.
+            // The analyzer *already* aggregates them.
+            // We just need to join them into the search string.
+            
+            // Collect all string arrays from the category data
+            const features: string[] = [];
+            Object.values(catData).forEach((val: any) => {
+                if (Array.isArray(val)) {
+                    features.push(val.join(' OR ')); // Join alternatives with OR
+                }
+            });
+            basicsKeywords = features.join(' ');
+        }
+    }
+
+    // 3. Base Search Context
     const constructQuery = (includeStyle: boolean) => {
         let parts = [];
-        
-        if (includeStyle && preferences.stylePreference) {
-            parts.push(preferences.stylePreference);
-        }
         
         if (searchColors) {
             parts.push(searchColors);
         }
+
+        // Add Basics Keywords (e.g. "blouse OR shirt", "long sleeve")
+        if (basicsKeywords) {
+            parts.push(basicsKeywords);
+        } else {
+             // Fallback to category if no basics found
+             // But we always need category anyway
+        }
         
         if (profile.gender) {
-            // Map gender to search-friendly terms
             const genderMap: Record<string, string> = {
                 'Female': "Women's",
                 'Male': "Men's",
@@ -75,7 +102,17 @@ export const runCategoryMicroAgent = async (
             parts.push(genderMap[profile.gender] || profile.gender);
         }
         
+        // Always include category name as a base anchor
         parts.push(category);
+
+        // Add Style Preference (if requested)
+        // User said: "{basics} to strict search... instead of 'white, top, women'"
+        // But didn't explicitly say to remove stylePreference. 
+        // However, usually "Style" is Vibe. "Basics" is Structure.
+        // Let's keep Style Preference as it adds flavor ("Boho", "Minimalist").
+        if (includeStyle && preferences.stylePreference) {
+            parts.push(preferences.stylePreference);
+        }
         
         return parts.join(' ');
     };

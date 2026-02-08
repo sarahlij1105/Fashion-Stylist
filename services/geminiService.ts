@@ -67,12 +67,12 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
 };
 
 // --- AGENT 1: The Vision Analyst ---
-export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose): Promise<Partial<UserProfile>> => {
+export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose, height?: string): Promise<Partial<UserProfile>> => {
   try {
     // --- CACHE CHECK ---
     // Generate signature from last 50 chars of image data (to handle large strings safely)
     const imgSignature = dataUrl.slice(-50);
-    const cacheKey = `vision_analyst_${await cacheManager.generateFastHash(imgSignature + purpose)}`;
+    const cacheKey = `vision_analyst_${await cacheManager.generateFastHash(imgSignature + purpose + (height || ''))}`;
     
     const cachedResult = await cacheManager.checkCache(cacheKey);
     if (cachedResult) {
@@ -97,11 +97,12 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose)
 
     const prompt = `
     Analyze this image for the "Elite Forensic Stylist" app. 
+    ${height ? `**User Height:** ${height}` : ''}
 
     **Your Tasks:**
     1. **Estimate User Attributes:**
        - Gender (Female/Male/Non-binary/Unknown)
-       - Size: Use visual cues (body proportions, existing garment fit). Output standard sizes: XS, S, M, L, XL, XXL
+       - Size: Use visual cues (body proportions, existing garment fit) ${height ? 'AND the provided height' : ''} to estimate clothing size. Output standard sizes: XS, S, M, L, XL, XXL
        - Current Style: Classify as one of: Casual, Formal, Streetwear, Boho, Minimalist, Sporty, Vintage, Other
        **NEW: Provide confidence score (0-100%) for each estimate**
 
