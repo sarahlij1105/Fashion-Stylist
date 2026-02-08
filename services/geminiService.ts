@@ -196,12 +196,80 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
   }
 };
 
+// --- AGENT 2B: STYLIST (Card 2 Recommendation) ---
+export const generateStylistRecommendations = async (
+    profile: UserProfile,
+    preferences: Preferences,
+    styleAnalysis: StyleAnalysisResult
+): Promise<{ userMessage: string; searchQueries: Record<string, string> }> => {
+    try {
+        const keptItems = profile.keptItems?.join(', ') || "No specific items identified";
+        const targetItems = preferences.itemType;
+        const styleVibe = styleAnalysis.suggestedStyles?.map(s => s.name).join(' OR ') || "General Style";
+        const detectedColors = styleAnalysis.detectedColors?.join(', ') || "No specific colors";
+        
+        // Extract structural details for kept items if available
+        const keptItemDetails = styleAnalysis.detailDataset ? JSON.stringify(styleAnalysis.detailDataset) : "No structural details";
+
+        const prompt = `
+        **AGENT: Personal Stylist**
+        **Goal:** Recommend specific items to complete the user's outfit and generate precise search queries for them.
+
+        **User Context:**
+        - **Current Outfit (Kept Items):** ${keptItems}
+        - **Kept Item Details:** ${keptItemDetails}
+        - **Target Items (To Buy):** ${targetItems}
+        - **User Vibe:** ${styleVibe}
+        - **Palette:** ${detectedColors}
+        - **User Stats:** Gender: ${profile.gender}, Size: ${profile.estimatedSize}
+
+        **Instructions:**
+        1. Analyze the "Kept Items" and their style/color.
+        2. Suggest **3 distinct options** for EACH target item category that would perfectly match the kept items.
+        3. For each option, specify: Color, Type, Features, Why.
+        4. **CRITICAL:** Generate a "Search Query" for EACH target category. This query will be used by a procurement bot to find the items. It should be a string of keywords including color, material, item name, and key details (e.g. "White Silk Camisole V-neck").
+
+        **Output Format (JSON):**
+        \`\`\`json
+        {
+          "userMessage": "Markdown string containing the friendly recommendations list (e.g. ### Top Recommendations...)",
+          "searchQueries": {
+            "CategoryName (e.g. Top)": "keywords for search",
+            "CategoryName (e.g. Shoes)": "keywords for search"
+          }
+        }
+        \`\`\`
+        `;
+
+        const response = await generateContentWithRetry(
+            'gemini-3-pro-preview',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: { responseMimeType: 'application/json' }
+            }
+        );
+
+        const text = response.text || "{}";
+        // Clean markdown code blocks
+        const cleanText = text.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+        return JSON.parse(cleanText);
+
+    } catch (e) {
+        console.error("Stylist Agent Failed:", e);
+        return { 
+            userMessage: "I couldn't generate recommendations at this time.", 
+            searchQueries: {} 
+        };
+    }
+};
+
 // --- ORCHESTRATOR ---
 export const searchAndRecommend = async (
   profile: UserProfile,
   preferences: Preferences,
   additionalContext: string = "",
-  providedStyleAnalysis?: StyleAnalysisResult
+  providedStyleAnalysis?: StyleAnalysisResult,
+  categorySpecificStyles?: Record<string, string>
 ): Promise<StylistResponse> => {
   const startTimeTotal = performance.now();
   const timings: string[] = [];
@@ -264,9 +332,17 @@ export const searchAndRecommend = async (
         const catStart = performance.now();
         const catTimings: string[] = [];
         
+        // Determine specific style preference for this category if available
+        // This allows "Search Query Translation" from Stylist Agent to Procurement Agent
+        let loopPreferences = preferences;
+        if (categorySpecificStyles && categorySpecificStyles[category]) {
+             console.log(`>> Applying Category-Specific Style for [${category}]: ${categorySpecificStyles[category]}`);
+             loopPreferences = { ...preferences, stylePreference: categorySpecificStyles[category] };
+        }
+
         // 1. Procurement (Micro-Agent)
         const t0 = performance.now();
-        const procurementResult = await runCategoryMicroAgent(category, profile, preferences, pathInstruction, today, styleAnalysis);
+        const procurementResult = await runCategoryMicroAgent(category, profile, loopPreferences, pathInstruction, today, styleAnalysis);
         const t1 = performance.now();
         const procDuration = (t1 - t0).toFixed(0);
         

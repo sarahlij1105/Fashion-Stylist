@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
-import { analyzeUserPhoto, searchAndRecommend, searchAndRecommendCard1 } from './services/geminiService';
+import { analyzeUserPhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle } from 'lucide-react';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 const DefaultProfile: UserProfile = {
   gender: 'Female',
@@ -32,6 +33,8 @@ const WIZARD_STEPS = [
   AppStep.IDEAL_STYLE, 
   AppStep.CONFIRMATION, 
   AppStep.PREFERENCES_DASHBOARD, // New consolidated step
+  AppStep.CARD2_DETAILS,
+  AppStep.CARD2_RECOMMENDATION,
   AppStep.SEARCHING,
   AppStep.RESULTS,
 ];
@@ -103,6 +106,13 @@ export default function App() {
 
   // --- CARD 1 FLOW STATE ---
   const [card1AnalysisPromise, setCard1AnalysisPromise] = useState<Promise<StyleAnalysisResult> | null>(null);
+  
+  // Card 2 State
+  const [keptItems, setKeptItems] = useState<string[]>([]);
+  const [stylistRecommendation, setStylistRecommendation] = useState<string>("");
+  const [stylistSearchQueries, setStylistSearchQueries] = useState<Record<string, string>>({});
+  const [isAnalyzingCard2, setIsAnalyzingCard2] = useState(false);
+  const [isGeneratingRecs, setIsGeneratingRecs] = useState(false);
 
   useEffect(() => {
     // Mount effect
@@ -1507,6 +1517,319 @@ export default function App() {
     );
   };
 
+  // --- CARD 2 LOGIC ---
+
+  const handleCard2Analysis = async () => {
+      if (!profile.userImageBase64) return;
+      
+      setIsAnalyzingCard2(true);
+      try {
+          // 1. Vision Analysis (Agent 1)
+          const analysis = await analyzeUserPhoto(profile.userImageBase64);
+          
+          // Update Profile with detected attributes
+          setProfile(prev => ({
+              ...prev,
+              gender: analysis.gender,
+              estimatedSize: analysis.estimatedSize,
+              currentStyle: analysis.currentStyle,
+              keptItems: analysis.keptItems || []
+          }));
+          
+          setKeptItems(analysis.keptItems || []);
+
+          // 2. Style Analysis (Agent 1.5) - on the same photo
+          // We treat the user photo as an "ideal style" example for vibe analysis
+          const styleResult = await runStyleExampleAnalyzer(
+              { ...profile, idealStyleImages: [profile.userImageBase64] }, 
+              preferences
+          );
+          
+          setCard1AnalysisPromise(Promise.resolve(styleResult)); // Reuse this state or create new one? 
+          // Let's reuse card1AnalysisPromise as a generic "style analysis" holder or create a specific one.
+          // Actually, we need the result for the next step immediately.
+          
+      } catch (e) {
+          console.error("Card 2 Analysis Failed", e);
+      } finally {
+          setIsAnalyzingCard2(false);
+      }
+  };
+
+  const handleGenerateStylistRecs = async () => {
+      setIsGeneratingRecs(true);
+      try {
+          // Resolve the style analysis (should be done by now)
+          // For now, we'll re-run or assume it's cached/available. 
+          // Ideally we pass the result from step 2A to 2B.
+          
+          // Let's re-run style analyzer quickly or use cached if we stored it.
+          // For simplicity, we'll re-trigger it or assume we have the data in 'profile' and 'preferences'.
+          // But 'styleResult' contains the vibe/colors which are crucial.
+          
+          // Better approach: Store styleAnalysisResult in state.
+          // I'll add a state for it.
+          
+          const styleResult = await runStyleExampleAnalyzer(
+              { ...profile, idealStyleImages: [profile.userImageBase64!] }, 
+              preferences
+          );
+
+          const recs = await generateStylistRecommendations(profile, preferences, styleResult);
+          setStylistRecommendation(recs.userMessage);
+          setStylistSearchQueries(recs.searchQueries);
+          setStep(AppStep.CARD2_RECOMMENDATION);
+      } catch (e) {
+          console.error("Stylist Recs Failed", e);
+      } finally {
+          setIsGeneratingRecs(false);
+      }
+  };
+
+  const handleCard2Search = async () => {
+      setStep(AppStep.SEARCHING);
+      
+      // Use the stylist recommendation as the "style preference" to guide the search
+      // We now pass the specific queries map
+      const enhancedPreferences = {
+          ...preferences,
+          // We don't overwrite stylePreference globally here, instead we pass the map
+      };
+
+      try {
+          // Use the standard search pipeline, but it will now use the specific recommendations
+          const result = await searchAndRecommend(
+              profile, 
+              enhancedPreferences, 
+              undefined, 
+              styleAnalysisResults || undefined,
+              stylistSearchQueries // Pass the map
+          );
+          
+          const newMsg: ChatMessage = {
+            role: 'model',
+            content: result.reflectionNotes,
+            data: result
+          };
+          setMessages(prev => [...prev, newMsg]);
+          setStep(AppStep.RESULTS);
+      } catch (error) {
+          console.error("Card 2 Search Failed", error);
+          setStep(AppStep.CARD2_RECOMMENDATION); // Go back on error
+      }
+  };
+
+  const renderCard2Details = () => (
+      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <ProgressBar currentStep={step} />
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">What are we matching?</h1>
+          <p className="text-stone-500 mb-6">Upload your current outfit and tell us what you need to complete the look.</p>
+
+          {/* 1. Target Categories */}
+          <div className="mb-6">
+              <label className="block text-sm font-medium text-stone-700 mb-2">I am looking for:</label>
+              <div className="flex flex-wrap gap-2">
+                  {['Top', 'Bottom', 'Shoes', 'Outerwear', 'Accessories'].map((type) => (
+                      <button
+                          key={type}
+                          onClick={() => {
+                              const current = preferences.itemType ? preferences.itemType.split(', ') : [];
+                              const updated = current.includes(type)
+                                  ? current.filter(t => t !== type)
+                                  : [...current, type];
+                              setPreferences(p => ({ ...p, itemType: updated.join(', ') }));
+                          }}
+                          className={`px-4 py-2 rounded-full text-sm border transition-all ${
+                              preferences.itemType.includes(type)
+                                  ? 'bg-stone-900 text-white border-stone-900'
+                                  : 'bg-white text-stone-600 border-stone-200 hover:border-stone-400'
+                          }`}
+                      >
+                          {type}
+                      </button>
+                  ))}
+              </div>
+          </div>
+
+          {/* 2. Upload Photo */}
+          <div className="mb-6">
+              <label className="block text-sm font-medium text-stone-700 mb-2">My Current Outfit:</label>
+              <div className="relative aspect-[3/4] bg-stone-50 border-2 border-dashed border-stone-200 rounded-xl overflow-hidden hover:bg-stone-100 transition-all group">
+                  {profile.userImageBase64 ? (
+                      <>
+                          <img src={profile.userImageBase64} alt="Current Outfit" className="w-full h-full object-cover" />
+                          <button 
+                              onClick={() => setProfile(p => ({...p, userImageBase64: null, keptItems: []}))}
+                              className="absolute top-2 right-2 bg-white/90 p-2 rounded-full shadow-sm text-stone-500 hover:text-red-500"
+                          >
+                              <X size={16} />
+                          </button>
+                      </>
+                  ) : (
+                      <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
+                          <Camera size={32} className="text-stone-400 mb-2 group-hover:scale-110 transition-transform" />
+                          <span className="text-sm text-stone-500">Tap to upload photo</span>
+                          <input 
+                              type="file" 
+                              className="hidden" 
+                              accept="image/*"
+                              onChange={async (e) => {
+                                  await handleFileUpload(e, 'userImageBase64');
+                                  // Auto-trigger analysis after upload
+                                  // We need to wait for state update, so we'll do it in useEffect or just let user click "Analyze"
+                              }}
+                          />
+                      </label>
+                  )}
+              </div>
+          </div>
+
+          {/* 3. Analysis & Confirmation Section */}
+          {profile.userImageBase64 && (
+             <div className="bg-stone-50 p-4 rounded-xl border border-stone-100 animate-fade-in">
+                 {!isAnalyzingCard2 && keptItems.length === 0 && (
+                     <button 
+                        onClick={handleCard2Analysis}
+                        className="w-full py-3 bg-stone-900 text-white rounded-lg font-medium text-sm flex items-center justify-center gap-2"
+                     >
+                        <Sparkles size={16} />
+                        Analyze Outfit
+                     </button>
+                 )}
+
+                 {isAnalyzingCard2 && (
+                     <div className="flex flex-col items-center py-4">
+                         <div className="w-6 h-6 border-2 border-stone-900 border-t-transparent rounded-full animate-spin mb-2" />
+                         <span className="text-xs text-stone-500">Scanning items & style...</span>
+                     </div>
+                 )}
+
+                 {keptItems.length > 0 && (
+                     <div className="space-y-4">
+                         <div>
+                             <h4 className="text-sm font-bold text-stone-900 mb-2">I am wearing (Keep selected):</h4>
+                             <div className="flex flex-wrap gap-2">
+                                 {keptItems.map((item, idx) => (
+                                     <button
+                                         key={idx}
+                                         onClick={() => {
+                                             // Toggle keep status (for now just UI, strictly we should update profile.keptItems)
+                                             const newKept = keptItems.includes(item) 
+                                                ? keptItems.filter(i => i !== item)
+                                                : [...keptItems, item]; // This logic is weird if we are iterating keptItems.
+                                             // Better:
+                                             // If it's in the list, we show it as selected.
+                                             // If user clicks, we remove it? Or just toggle visual state?
+                                             // Let's assume all in keptItems are "detected". User confirms which to "keep".
+                                             // We need a separate state for "confirmedKeptItems" or just filter the main list.
+                                             // For simplicity: Click to remove.
+                                             setKeptItems(prev => prev.filter((_, i) => i !== idx));
+                                             setProfile(p => ({...p, keptItems: p.keptItems?.filter((_, i) => i !== idx)}));
+                                         }}
+                                         className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-medium text-stone-700 flex items-center gap-2 hover:border-red-200 hover:bg-red-50 group"
+                                     >
+                                         {item}
+                                         <X size={12} className="text-stone-400 group-hover:text-red-500" />
+                                     </button>
+                                 ))}
+                             </div>
+                         </div>
+                         
+                         <div className="grid grid-cols-2 gap-4">
+                             <div>
+                                 <label className="text-xs font-medium text-stone-500">Gender</label>
+                                 <select 
+                                    value={profile.gender}
+                                    onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
+                                    className="w-full mt-1 px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm"
+                                 >
+                                     <option value="Female">Female</option>
+                                     <option value="Male">Male</option>
+                                     <option value="Non-binary">Non-binary</option>
+                                 </select>
+                             </div>
+                             <div>
+                                 <label className="text-xs font-medium text-stone-500">Size</label>
+                                 <input 
+                                    type="text"
+                                    value={profile.estimatedSize}
+                                    onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
+                                    className="w-full mt-1 px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm"
+                                 />
+                             </div>
+                         </div>
+                     </div>
+                 )}
+             </div>
+          )}
+
+          <NavigationButtons 
+              onContinue={handleGenerateStylistRecs}
+              disabled={!profile.userImageBase64 || keptItems.length === 0 || !preferences.itemType}
+              continueLabel={isGeneratingRecs ? "Designing..." : "Get Recommendations"}
+              onBack={() => setStep(AppStep.GOAL_SELECTION)}
+          />
+      </div>
+  );
+
+  const renderCard2Recommendations = () => (
+      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32 h-[100dvh] flex flex-col">
+          <ProgressBar currentStep={step} />
+          <div className="flex-1 overflow-y-auto">
+              <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Stylist Recommendations</h1>
+              <p className="text-stone-500 mb-6">Here is what I recommend to complete your look.</p>
+
+              <div className="bg-stone-50 p-6 rounded-2xl border border-stone-100 prose prose-stone prose-sm max-w-none mb-6">
+                  <ReactMarkdown>{stylistRecommendation}</ReactMarkdown>
+              </div>
+
+              <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm">
+                  <h4 className="text-sm font-bold text-stone-900 mb-2 flex items-center gap-2">
+                      <MessageSquare size={16} />
+                      Refine Suggestions
+                  </h4>
+                  <div className="flex gap-2">
+                      <input 
+                          type="text" 
+                          placeholder="e.g., No silk, I prefer cotton..." 
+                          className="flex-1 bg-stone-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-stone-900"
+                          onKeyDown={async (e) => {
+                              if (e.key === 'Enter') {
+                                  const input = e.currentTarget;
+                                  const feedback = input.value;
+                                  input.value = "Updating...";
+                                  input.disabled = true;
+                                  
+                                  // Quick hack: Append feedback to preferences and re-run
+                                  // Ideally we have a dedicated refinement agent
+                                  const newRecs = await generateStylistRecommendations(
+                                      profile, 
+                                      {...preferences, stylePreference: feedback}, // Inject feedback
+                                      { analysisStatus: 'success' } // Mock analysis result for speed or fetch real one
+                                  );
+                                  setStylistRecommendation(newRecs.userMessage);
+                                  setStylistSearchQueries(newRecs.searchQueries);
+                                  
+                                  input.value = "";
+                                  input.disabled = false;
+                              }
+                          }}
+                      />
+                      <button className="bg-stone-100 p-2 rounded-lg text-stone-600 hover:bg-stone-200">
+                          <ArrowRight size={16} />
+                      </button>
+                  </div>
+              </div>
+          </div>
+
+          <NavigationButtons 
+              onContinue={handleCard2Search}
+              continueLabel="Find These Items"
+              onBack={() => setStep(AppStep.CARD2_DETAILS)}
+          />
+      </div>
+  );
+
   const renderIdealStyle = () => {
     return (
         <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
@@ -1730,6 +2053,9 @@ export default function App() {
             {step === AppStep.CARD1_DETAILS && renderCard1Details()}
             {step === AppStep.CARD1_PROFILE && renderCard1Profile()}
             {step === AppStep.CARD1_CONFIRM && renderCard1Confirm()}
+            {/* Card 2 Flow */}
+            {step === AppStep.CARD2_DETAILS && renderCard2Details()}
+            {step === AppStep.CARD2_RECOMMENDATION && renderCard2Recommendations()}
             {/* Standard Flow */}
             {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
             {step === AppStep.CONFIRMATION && renderConfirmation()}
