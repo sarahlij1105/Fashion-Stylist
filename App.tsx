@@ -1,6 +1,28 @@
+import React, { useState, useEffect } from 'react';
+import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
+import { analyzeUserPhoto, searchAndRecommend } from './services/geminiService';
+import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle } from 'lucide-react';
 
-// ... (imports)
+const DefaultProfile: UserProfile = {
+  gender: 'Female',
+  estimatedSize: 'M',
+  currentStyle: '',
+  keptItems: [],
+  userImageBase64: null,
+  idealStyleImages: [],
+};
+
+const DefaultPreferences: Preferences = {
+  purpose: FashionPurpose.NEW_OUTFIT,
+  occasion: '',
+  stylePreference: '',
+  colors: '',
+  priceRange: '$50 - $200',
+  location: 'New York, USA',
+  itemType: '',
+};
 
 const WIZARD_STEPS = [
   AppStep.GOAL_SELECTION, // Will become LANDING
@@ -65,10 +87,38 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ currentStep }) => {
 };
 
 export default function App() {
-  // ... (state)
+  const [step, setStep] = useState<AppStep>(AppStep.GOAL_SELECTION);
+  const [profile, setProfile] = useState<UserProfile>(DefaultProfile);
+  const [preferences, setPreferences] = useState<Preferences>(DefaultPreferences);
+  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [styleAnalysisResults, setStyleAnalysisResults] = useState<StyleAnalysisResult | null>(null);
+
+  const [selectedItemTypes, setSelectedItemTypes] = useState<string[]>([]);
+  const [customItemType, setCustomItemType] = useState<string>('');
+  const [minPrice, setMinPrice] = useState<number | string>(210);
+  const [maxPrice, setMaxPrice] = useState<number | string>(1000);
+
   const [searchQuery, setSearchQuery] = useState(''); // For Landing & Refinement
 
-  // ... (effects)
+  useEffect(() => {
+    // Mount effect
+    console.log("App mounted");
+  }, []);
+
+  // Update Item Type and Price Preferences
+  useEffect(() => {
+    const processedItemTypes = selectedItemTypes.map(t => {
+        if (t === 'Other') return customItemType.trim();
+        return t;
+    }).filter(t => t.length > 0 && t !== 'Other');
+
+    setPreferences(prev => ({
+      ...prev,
+      itemType: processedItemTypes.join(', '),
+      priceRange: `$${minPrice} - $${maxPrice}`
+    }));
+  }, [selectedItemTypes, customItemType, minPrice, maxPrice]);
 
   // --- NEW: Landing Page Logic ---
   const handleSmartEntry = async () => {
