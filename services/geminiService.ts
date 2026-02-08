@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { UserProfile, Preferences, RecommendationItem, StylistResponse, OutfitComponent, FashionPurpose, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, ProfessionalStylistResponse } from "../types";
+import { UserProfile, Preferences, RecommendationItem, StylistResponse, OutfitComponent, FashionPurpose, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, ProfessionalStylistResponse, StylistOutfit } from "../types";
 import { masterStyleGuide } from "./masterStyleGuide";
 import { runCategoryMicroAgent } from "./agent2_procurement_temp";
 import { runVerificationStep, runStylistScoringStep, runOutfitComposerStep } from "./agent3_curator_temp";
@@ -651,7 +651,190 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
     }
 };
 
-// --- ORCHESTRATOR ---
+/**
+ * SEARCH QUERY GENERATOR (Gemini 3 Pro)
+ * Takes a confirmed stylist outfit and generates optimized SerpApi search strings per item.
+ */
+export const generateSearchQueries = async (
+    outfit: StylistOutfit,
+    profile: UserProfile,
+    preferences: Preferences
+): Promise<Record<string, string>> => {
+    try {
+        const genderLabel = profile.gender === 'Female' ? "women's" : profile.gender === 'Male' ? "men's" : "unisex";
+        const size = profile.estimatedSize || '';
+        const budget = preferences.priceRange || '';
+
+        const itemsSummary = outfit.recommendations.map(rec =>
+            `- Category: ${rec.category}, Item: ${rec.item_name}, Color: ${rec.color_role || 'any'}, Reason: ${rec.style_reason}`
+        ).join('\n');
+
+        const prompt = `
+**ROLE:** You are a Google Shopping search expert. Your job is to generate highly effective SerpApi search strings for fashion items.
+
+**USER CONTEXT:**
+- Gender: ${genderLabel}
+- Size: ${size}
+- Budget: ${budget}
+
+**ITEMS TO SEARCH FOR:**
+${itemsSummary}
+
+**YOUR TASK:**
+For each item above, generate a single optimized Google Shopping search query string.
+
+**RULES:**
+1. Include gender (e.g. "women's"), color, material/fabric if relevant, and item type.
+2. Include a key feature or silhouette detail (e.g. "high-waisted", "oversized", "cropped").
+3. Keep it concise (6-12 words). Do NOT include brand names unless specified.
+4. Add "buy online" at the end of each query.
+5. Do NOT include price or size in the query — SerpApi handles filters separately.
+6. Exclude: -pinterest -polyvore -lyst
+
+**OUTPUT FORMAT (Strict JSON):**
+{
+  "queries": {
+    "<category>": "<search query string>"
+  }
+}
+
+Example:
+{
+  "queries": {
+    "bottom": "women's black high-waisted wide-leg trousers buy online -pinterest -polyvore -lyst",
+    "footwear": "women's white chunky platform sneakers buy online -pinterest -polyvore -lyst"
+  }
+}
+`;
+
+        const response = await generateContentWithRetry(
+            'gemini-3-pro-preview',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: { responseMimeType: 'application/json' }
+            }
+        );
+
+        const text = response.text || "{}";
+        const parsed = JSON.parse(text);
+        return parsed.queries || {};
+
+    } catch (e) {
+        console.error("Search Query Generator Failed:", e);
+        // Fallback: use the serp_query from the stylist output directly
+        const fallback: Record<string, string> = {};
+        outfit.recommendations.forEach(rec => {
+            if (rec.serp_query) {
+                fallback[rec.category] = rec.serp_query + " buy online -pinterest -polyvore -lyst";
+            }
+        });
+        return fallback;
+    }
+};
+
+/**
+ * SIMPLIFIED SEARCH PIPELINE
+ * Flow: Gemini Pro queries → Parallel SerpApi procurement → Verification (URL/availability) → Top 3 per category
+ * Disabled: Curator, PreOrchestrator, PostOrchestrator, Scoring, Composer
+ */
+export const searchWithStylistQueries = async (
+    profile: UserProfile,
+    preferences: Preferences,
+    searchQueries: Record<string, string>
+): Promise<StylistResponse> => {
+    const startTimeTotal = performance.now();
+    const timings: string[] = [];
+    const logMessages: string[] = [];
+
+    try {
+        const categories = Object.keys(searchQueries);
+        const today = new Date().toLocaleDateString();
+
+        console.log("--- STARTING SIMPLIFIED SEARCH PIPELINE ---");
+        console.log(`Categories: ${categories.join(', ')}`);
+
+        // --- PARALLEL PROCUREMENT + VERIFICATION PER CATEGORY ---
+        const pipelinePromises = categories.map(async (category) => {
+            const catStart = performance.now();
+            const query = searchQueries[category];
+
+            logMessages.push(`[${category}] Search Query: "${query}"`);
+
+            // 1. Procurement (SerpApi via micro-agent with pre-built query)
+            const t0 = performance.now();
+            const pathInstruction = `Search for: ${query}`;
+            const loopPreferences = { ...preferences, stylePreference: query };
+            const procurementResult = await runCategoryMicroAgent(
+                category, profile, loopPreferences, pathInstruction, today, undefined
+            );
+            const t1 = performance.now();
+            logMessages.push(`[${category}] Procurement: Found ${procurementResult.initialCandidateCount} candidates, ${procurementResult.items.length} after procurement filter (${(t1 - t0).toFixed(0)}ms)`);
+
+            // 2. Verification (URL check, blacklist, price, availability — NO scoring, NO curator)
+            const t2 = performance.now();
+            const verificationResult = await runVerificationStep(
+                { validatedItems: { [category]: procurementResult.items } },
+                "None",
+                preferences,
+                profile
+            );
+            const t3 = performance.now();
+
+            const verifiedItems = verificationResult.validatedItems?.[category] || [];
+            logMessages.push(`[${category}] Verification: ${procurementResult.items.length} → ${verifiedItems.length} passed (${(t3 - t2).toFixed(0)}ms)`);
+
+            // 3. Take Top 3 (by order — SerpApi already returns relevance-ranked results)
+            const top3 = verifiedItems.slice(0, 3);
+            
+            const totalDuration = (performance.now() - catStart).toFixed(0);
+            timings.push(`Pipeline (${category}): ${totalDuration}ms`);
+
+            // Add debug logs
+            const logs: string[] = [];
+            if (procurementResult.debugLogs) logs.push(...procurementResult.debugLogs);
+            if (verificationResult.debugLogs) logs.push(...verificationResult.debugLogs);
+
+            return { category, topItems: top3, logs };
+        });
+
+        const pipelineResults = await Promise.all(pipelinePromises);
+
+        // --- ASSEMBLE FINAL RESULTS ---
+        const recommendations: RecommendationItem[] = [];
+
+        pipelineResults.forEach(res => {
+            logMessages.push(...res.logs);
+
+            if (res.topItems.length > 0) {
+                recommendations.push({
+                    name: `Top Picks: ${res.category}`,
+                    description: `Best matches from shopping search.`,
+                    components: res.topItems.map((item: any) => ({
+                        category: res.category,
+                        name: item.name,
+                        brand: item.source || "Unknown",
+                        price: item.price,
+                        purchaseUrl: item.purchaseUrl,
+                        validationNote: `Verified ✓`,
+                        fallbackSearchUrl: item.fallbackSearchUrl
+                    }))
+                });
+            }
+        });
+
+        const totalTime = (performance.now() - startTimeTotal).toFixed(0);
+        const telemetry = `\n--- SEARCH PIPELINE TELEMETRY ---\n${timings.join('\n')}\nTotal Latency: ${totalTime}ms\n\n`;
+        const reflectionNotes = logMessages.join('\n') + "\n\n" + telemetry;
+
+        return { recommendations, reflectionNotes };
+
+    } catch (error) {
+        console.error("Error in Simplified Search Pipeline:", error);
+        throw error;
+    }
+};
+
+// --- LEGACY ORCHESTRATOR (kept for backward compatibility) ---
 export const searchAndRecommend = async (
   profile: UserProfile,
   preferences: Preferences,

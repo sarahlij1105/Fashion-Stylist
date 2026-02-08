@@ -150,7 +150,7 @@ export interface StyleAnalysisResult {
     matchReason?: string;
   }[];
   detectedColors?: string[];
-  detectedComponents?: string[]; // Clothing components detected in photos (e.g. ["top", "bottom", "shoes", "bag"])
+  detectedComponents?: Array<{category: string; type: string} | string>; // Clothing items detected in photos, e.g. [{category: "tops", type: "tank top"}]
   detailDataset?: any; // The structural vocabulary matches
   // Legacy fallback
   visualSimilarityRubric?: any;

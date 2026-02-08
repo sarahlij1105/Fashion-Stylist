@@ -141,9 +141,12 @@ export const runStyleExampleAnalyzer = async (
     - Return a simple list of color names (e.g., "Navy Blue", "Cream", "Burgundy").
 
     **STEP 3: Component Detection**
-    - Identify ALL clothing categories/components visible in the images.
-    - Use these category names ONLY: "top", "bottom", "dress", "outerwear", "footwear", "handbag", "jewelry", "hair_accessories"
-    - For example, if the photo shows a blouse, jeans, heels, and a clutch, return: ["top", "bottom", "footwear", "handbag"]
+    - Identify ALL clothing items visible in the images.
+    - For EACH item, return BOTH the **category** and the specific **type** from the Fashion Vocabulary (category → basics → types).
+    - Valid categories: "tops", "bottoms", "dresses", "outerwear", "footwear", "handbags", "jewelry", "hair_accessories"
+    - The "type" MUST be a specific type from the Fashion Vocabulary's "basics.types" list for that category.
+    - For example, if the photo shows a tank top, skinny jeans, ankle boots, and a crossbody bag, return:
+      [{"category": "tops", "type": "tank top"}, {"category": "bottoms", "type": "skinny jeans"}, {"category": "footwear", "type": "ankle boots"}, {"category": "handbags", "type": "crossbody bag"}]
     - Look across ALL uploaded images and combine the results.
 
     **STEP 4: Structural Detail Extraction**
@@ -164,7 +167,11 @@ export const runStyleExampleAnalyzer = async (
         }
       ],
       "detected_colors": ["String", "String"],
-      "detected_components": ["top", "bottom", "footwear"],
+      "detected_components": [
+        {"category": "tops", "type": "tank top"},
+        {"category": "bottoms", "type": "skinny jeans"},
+        {"category": "footwear", "type": "ankle boots"}
+      ],
       "detail_dataset": {
         "category_name (e.g. tops)": {
            "necklines": ["String"],

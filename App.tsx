@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, generateOccasionPlan, runChatRefinement, resolveItemCategory } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, generateOccasionPlan, runChatRefinement, resolveItemCategory, generateSearchQueries, searchWithStylistQueries } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote } from 'lucide-react';
@@ -492,32 +492,57 @@ export default function App() {
     );
   };
 
+  // Helper: normalize detected components (supports new {category, type} and legacy string formats)
+  const normalizeDetectedComponents = (components: Array<{category: string; type: string} | string> | undefined) => {
+      if (!components || components.length === 0) return { typeNames: [], categories: [] };
+
+      const categoryMapping: Record<string, string> = {
+          'top': 'tops', 'tops': 'tops', 'bottom': 'bottoms', 'bottoms': 'bottoms',
+          'dress': 'dresses', 'dresses': 'dresses', 'outerwear': 'outerwear',
+          'footwear': 'footwear', 'handbag': 'handbags', 'handbags': 'handbags',
+          'jewelry': 'jewelry', 'hair_accessories': 'hair_accessories',
+      };
+      const fallbackCategoryDisplay: Record<string, string> = {
+          'tops': 'Top', 'bottoms': 'Bottom', 'dresses': 'Dress',
+          'outerwear': 'Outerwear', 'footwear': 'Footwear',
+          'handbags': 'Handbag', 'jewelry': 'Jewelry',
+          'hair_accessories': 'Hair Accessories',
+      };
+
+      const typeNames: string[] = [];
+      const categories: string[] = [];
+
+      for (const comp of components) {
+          if (typeof comp === 'object' && comp.category && comp.type) {
+              // New format: {category: "tops", type: "tank top"}
+              // Capitalize type for display: "tank top" -> "Tank Top"
+              const displayType = comp.type.replace(/\b\w/g, (c: string) => c.toUpperCase());
+              typeNames.push(displayType);
+              const cat = categoryMapping[comp.category.toLowerCase()] || comp.category.toLowerCase();
+              if (!categories.includes(cat)) categories.push(cat);
+          } else if (typeof comp === 'string') {
+              // Legacy format: "top"
+              const cat = categoryMapping[comp.toLowerCase()] || comp.toLowerCase();
+              const displayName = fallbackCategoryDisplay[cat] || comp;
+              typeNames.push(displayName);
+              if (!categories.includes(cat)) categories.push(cat);
+          }
+      }
+      return { typeNames, categories };
+  };
+
   // Initialize search criteria from style analysis results (accepts optional direct result)
   const initSearchCriteriaFromAnalysisResult = (result?: StyleAnalysisResult | null) => {
       const analysisResult = result || styleAnalysisResults;
       
-      // Build detected components list
-      const detectedComponents = analysisResult?.detectedComponents || [];
-      const componentToDisplayName: Record<string, string> = {
-          'top': 'Top', 'bottom': 'Bottom', 'dress': 'Dress',
-          'outerwear': 'Outerwear', 'footwear': 'Shoes',
-          'handbag': 'Handbags', 'jewelry': 'Jewelries',
-          'hair_accessories': 'Hair Accessories',
-      };
-      const displayNameToCategory: Record<string, string> = {
-          'Dress': 'dresses', 'Top': 'tops', 'Bottom': 'bottoms',
-          'Shoes': 'footwear', 'Outerwear': 'outerwear', 'Handbags': 'handbags',
-          'Hair Accessories': 'hair_accessories', 'Jewelries': 'jewelry'
-      };
-      
-      // Use detected components to build item lists
-      const detectedDisplayNames = detectedComponents.map((c: string) => componentToDisplayName[c.toLowerCase()] || c);
-      const detectedItemCategories = detectedDisplayNames.map((t: string) => displayNameToCategory[t] || t.toLowerCase());
+      // Build detected components list using normalized helper
+      const { typeNames: detectedTypeNames, categories: detectedItemCategories } = 
+          normalizeDetectedComponents(analysisResult?.detectedComponents);
 
       const criteria: SearchCriteria = {
           style: analysisResult?.suggestedStyles?.map(s => s.name).join(', ') || null,
           colors: analysisResult?.detectedColors || [],
-          includedItems: detectedDisplayNames.map((t: string) => t.toLowerCase()),
+          includedItems: detectedTypeNames.map(t => t.toLowerCase()),
           itemCategories: detectedItemCategories,
           excludedMaterials: [],
           occasion: preferences.occasion || null,
@@ -526,9 +551,9 @@ export default function App() {
       };
       setSearchCriteria(criteria);
       
-      // Build initial system message for chat
-      const componentsText = detectedDisplayNames.length > 0 
-          ? detectedDisplayNames.join(' + ') 
+      // Build initial system message for chat — use specific type names
+      const componentsText = detectedTypeNames.length > 0 
+          ? detectedTypeNames.join(' + ') 
           : 'No specific items detected';
       
       const systemMsg: RefinementChatMessage = {
@@ -601,49 +626,45 @@ export default function App() {
       setIsLoading(true);
 
       try {
-          // Build categorySpecificStyles from searchCriteria
-          // Map: for each itemCategory, check if there's a specific includedItem for it
-          // e.g. if user said "skirt" (category=bottoms), search term should be "skirt" not "bottoms"
-          const categorySpecificStyles: Record<string, string> = {};
+          // Build a synthetic StylistOutfit from searchCriteria for query generation
+          const genderLabel = profile.gender === 'Female' ? "women's" : profile.gender === 'Male' ? "men's" : "unisex";
+          const styleLabel = searchCriteria.style || preferences.stylePreference || '';
+          const colorsLabel = searchCriteria.colors.length > 0 ? searchCriteria.colors.join(', ') : '';
           
-          searchCriteria.includedItems.forEach(item => {
-              const cat = resolveItemCategory(item);
-              if (cat !== 'unknown') {
-                  // Use the specific item name as the search style
-                  // e.g. "skirt" → category "bottoms", search term "skirt"
-                  const existing = categorySpecificStyles[cat];
-                  categorySpecificStyles[cat] = existing ? `${existing}, ${item}` : item;
-              }
+          // Build one recommendation per category from searchCriteria
+          const syntheticRecs = searchCriteria.itemCategories.map((cat, idx) => {
+              const specificItem = searchCriteria.includedItems[idx] || cat;
+              return {
+                  category: cat,
+                  item_name: `${colorsLabel} ${specificItem}`.trim(),
+                  serp_query: `${genderLabel} ${colorsLabel} ${specificItem} ${styleLabel} buy online -pinterest -polyvore -lyst`.trim(),
+                  style_reason: styleLabel,
+                  color_role: colorsLabel,
+              };
           });
 
-          // Build preferences from searchCriteria
+          const syntheticOutfit: StylistOutfit = {
+              name: 'Style Clone Search',
+              logic: `Searching for items matching analyzed style: ${styleLabel}`,
+              recommendations: syntheticRecs,
+          };
+
+          // Step 1: Gemini Pro generates optimized search queries
+          console.log(">> Card 1: Generating search queries with Gemini Pro...");
           const chatPreferences: Preferences = {
               ...preferences,
               stylePreference: searchCriteria.style || preferences.stylePreference,
               colors: searchCriteria.colors.length > 0 ? searchCriteria.colors.join(', ') : preferences.colors,
               occasion: searchCriteria.occasion || preferences.occasion,
               priceRange: searchCriteria.priceRange || preferences.priceRange,
-              // Use CATEGORIES (not specific items) for pipeline routing
-              itemType: searchCriteria.itemCategories.length > 0
-                  ? [...new Set(searchCriteria.itemCategories)].join(', ')
-                  : preferences.itemType,
+              itemType: searchCriteria.itemCategories.join(', '),
           };
 
-          // Build additional context from chat
-          let additionalContext = '';
-          if (searchCriteria.excludedMaterials.length > 0) {
-              additionalContext += `AVOID these materials: ${searchCriteria.excludedMaterials.join(', ')}. `;
-          }
-          if (searchCriteria.additionalNotes) {
-              additionalContext += searchCriteria.additionalNotes;
-          }
+          const searchQueries = await generateSearchQueries(syntheticOutfit, profile, chatPreferences);
+          console.log(">> Search queries:", searchQueries);
 
-          const result = await searchAndRecommendCard1(
-              profile,
-              chatPreferences,
-              styleAnalysisResults || undefined,
-              categorySpecificStyles
-          );
+          // Step 2: Run simplified pipeline
+          const result = await searchWithStylistQueries(profile, chatPreferences, searchQueries);
 
           const newMsg: ChatMessage = {
               role: 'model',
@@ -666,7 +687,7 @@ export default function App() {
     setIsLoading(true);
 
     try {
-      // Use the specialized pipeline
+      // Fallback: use legacy Card 1 pipeline if no search criteria available
       const result = await searchAndRecommendCard1(profile, preferences, styleAnalysisResults || undefined);
       const newMsg: ChatMessage = {
         role: 'model',
@@ -706,17 +727,16 @@ export default function App() {
               const result = await runStyleExampleAnalyzer(profile, analysisPrefs);
               setStyleAnalysisResults(result);
 
-              // Auto-populate selectedItemTypes from detected components
+              // Auto-populate selectedItemTypes from detected components (use categories for search routing)
               if (result?.detectedComponents && result.detectedComponents.length > 0) {
-                  const componentToDisplayName: Record<string, string> = {
-                      'top': 'Top', 'bottom': 'Bottom', 'dress': 'Dress',
-                      'outerwear': 'Outerwear', 'footwear': 'Shoes',
-                      'handbag': 'Handbags', 'jewelry': 'Jewelries',
+                  const catToDisplayName: Record<string, string> = {
+                      'tops': 'Top', 'bottoms': 'Bottom', 'dresses': 'Dress',
+                      'outerwear': 'Outerwear', 'footwear': 'Footwear',
+                      'handbags': 'Handbags', 'jewelry': 'Jewelries',
                       'hair_accessories': 'Hair Accessories',
                   };
-                  const detected = result.detectedComponents
-                      .map((c: string) => componentToDisplayName[c.toLowerCase()] || c)
-                      .filter(Boolean);
+                  const { categories } = normalizeDetectedComponents(result.detectedComponents);
+                  const detected = categories.map(c => catToDisplayName[c] || c).filter(Boolean);
                   setSelectedItemTypes(detected);
               }
 
@@ -1882,33 +1902,16 @@ export default function App() {
       
       setStep(AppStep.SEARCHING);
       
-      // Build categorySpecificStyles from the selected outfit's recommendations
       const selectedOutfit = stylistOutfits[selectedOutfitIndex];
-      const categorySearchMap: Record<string, string> = {};
-      const categorySet = new Set<string>();
-      
-      selectedOutfit.recommendations.forEach(rec => {
-          // Map the stylist's category to pipeline category and use serp_query as search term
-          const cat = resolveItemCategory(rec.category) !== 'unknown' 
-              ? resolveItemCategory(rec.category) 
-              : rec.category;
-          categorySearchMap[cat] = rec.serp_query;
-          categorySet.add(cat);
-      });
-
-      const enhancedPreferences = {
-          ...preferences,
-          itemType: [...categorySet].join(', '),
-      };
 
       try {
-          const result = await searchAndRecommend(
-              profile, 
-              enhancedPreferences, 
-              `Selected outfit: "${selectedOutfit.name}". ${selectedOutfit.logic}`, 
-              styleAnalysisResults || undefined,
-              categorySearchMap
-          );
+          // Step 1: Gemini Pro generates optimized SerpApi search queries
+          console.log(">> Generating search queries with Gemini Pro...");
+          const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
+          console.log(">> Search queries:", searchQueries);
+
+          // Step 2: Run simplified pipeline (procurement + verification + top 3)
+          const result = await searchWithStylistQueries(profile, preferences, searchQueries);
           
           const newMsg: ChatMessage = {
             role: 'model',
@@ -2507,30 +2510,15 @@ export default function App() {
 
       setStep(AppStep.SEARCHING);
       const selectedOutfit = stylistOutfits[selectedOutfitIndex];
-      const categorySearchMap: Record<string, string> = {};
-      const categorySet = new Set<string>();
-
-      selectedOutfit.recommendations.forEach(rec => {
-          const cat = resolveItemCategory(rec.category) !== 'unknown'
-              ? resolveItemCategory(rec.category)
-              : rec.category;
-          categorySearchMap[cat] = rec.serp_query;
-          categorySet.add(cat);
-      });
-
-      const enhancedPreferences = {
-          ...preferences,
-          itemType: [...categorySet].join(', '),
-      };
 
       try {
-          const result = await searchAndRecommend(
-              profile,
-              enhancedPreferences,
-              `Selected outfit: "${selectedOutfit.name}". ${selectedOutfit.logic}`,
-              undefined,
-              categorySearchMap
-          );
+          // Step 1: Gemini Pro generates optimized SerpApi search queries
+          console.log(">> Generating search queries with Gemini Pro...");
+          const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
+          console.log(">> Search queries:", searchQueries);
+
+          // Step 2: Run simplified pipeline (procurement + verification + top 3)
+          const result = await searchWithStylistQueries(profile, preferences, searchQueries);
 
           const newMsg: ChatMessage = {
               role: 'model',
