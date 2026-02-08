@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, generateOccasionPlan, runChatRefinement, resolveItemCategory, generateSearchQueries, searchWithStylistQueries } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, generateOccasionPlan, runChatRefinement, resolveItemCategory, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote } from 'lucide-react';
@@ -2038,6 +2038,10 @@ export default function App() {
           setIsGeneratingRecs(true);
           setChatMessages([]);
           setChatInput('');
+          setStylistOutfits([]);
+          setSelectedOutfitIndex(null);
+          setCard3Plan(null);
+          setStyleAnalysisResults(null);
           
           try {
               // 1. Style Analysis (Agent 1.5) - analyze ONLY the kept items' style/colors
@@ -2062,6 +2066,11 @@ export default function App() {
               const response = await generateStylistRecommendations(profileWithKept, stylistPrefs, styleResult);
               setStylistOutfits(response.outfits);
               setSelectedOutfitIndex(0);
+
+              // Fire hero image generation in background (non-blocking)
+              generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
+                  setStylistOutfits(outfitsWithImages);
+              });
               
               // Build chat messages
               const styleName = styleResult?.suggestedStyles?.map(s => s.name).join(', ') || 'Your style';
@@ -2433,6 +2442,20 @@ export default function App() {
                                                   : 'border border-stone-200 shadow-sm'
                                           }`}
                                       >
+                                          {/* Hero Image */}
+                                          {outfit.heroImageBase64 ? (
+                                              <div className="w-full aspect-[3/4] bg-stone-50 overflow-hidden">
+                                                  <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
+                                              </div>
+                                          ) : (
+                                              <div className="w-full aspect-[3/4] bg-stone-50 flex items-center justify-center">
+                                                  <div className="text-center text-stone-300">
+                                                      <div className="w-8 h-8 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin mx-auto mb-2" />
+                                                      <p className="text-[10px]">Generating preview...</p>
+                                                  </div>
+                                              </div>
+                                          )}
+
                                           {/* Card Header */}
                                           <div className="px-4 py-3.5 bg-white border-b border-stone-100">
                                               <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
@@ -2624,6 +2647,11 @@ export default function App() {
           const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis);
           setStylistOutfits(response.outfits);
           setSelectedOutfitIndex(0);
+
+          // Fire hero image generation in background (non-blocking)
+          generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
+              setStylistOutfits(outfitsWithImages);
+          });
       } catch (e) {
           console.error("Card 3 Stylist Failed", e);
           alert(`Something went wrong. Error: ${e instanceof Error ? e.message : String(e)}`);
@@ -2944,6 +2972,20 @@ export default function App() {
                                               isSelected ? 'border-2 border-emerald-500 shadow-lg shadow-emerald-100' : 'border border-stone-200 shadow-sm'
                                           }`}
                                       >
+                                          {/* Hero Image */}
+                                          {outfit.heroImageBase64 ? (
+                                              <div className="w-full aspect-[3/4] bg-stone-50 overflow-hidden">
+                                                  <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
+                                              </div>
+                                          ) : (
+                                              <div className="w-full aspect-[3/4] bg-stone-50 flex items-center justify-center">
+                                                  <div className="text-center text-stone-300">
+                                                      <div className="w-8 h-8 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin mx-auto mb-2" />
+                                                      <p className="text-[10px]">Generating preview...</p>
+                                                  </div>
+                                              </div>
+                                          )}
+
                                           <div className="px-4 py-3.5 bg-white border-b border-stone-100">
                                               <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
                                           </div>
@@ -3212,82 +3254,98 @@ export default function App() {
                           ) : null;
                       })()}
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {msg.data?.recommendations.map((outfit, rIdx) => (
-                              <div key={rIdx} className="bg-white rounded-3xl overflow-hidden flex flex-col shadow-xl border border-stone-100 ring-1 ring-stone-900/5">
-                                  <div className="p-6 pb-4 bg-stone-50 border-b border-stone-100">
-                                      <h4 className="font-serif text-xl font-bold text-stone-900 leading-tight mb-1">{outfit.name}</h4>
-                                      <p className="text-xs font-sans text-stone-500 uppercase tracking-widest">{outfit.totalPrice || 'Estimating...'} Est. Total</p>
+                      <div className="space-y-5">
+                          {msg.data?.recommendations.map((outfit, rIdx) => {
+                              const catIcon = itemCatIcon(outfit.name.toLowerCase().includes('top') ? 'top' : outfit.components?.[0]?.category || '');
+                              return (
+                              <div key={rIdx} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-stone-100">
+                                  {/* Category Group Header */}
+                                  <div className="flex items-center justify-between px-5 py-4 border-b border-stone-50">
+                                      <div className="flex items-center gap-2.5">
+                                          <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
+                                              <ShoppingBag size={16} className="text-emerald-600" />
+                                          </div>
+                                          <h4 className="font-bold text-base text-stone-900">{outfit.name}</h4>
+                                      </div>
+                                      <span className="text-xs font-medium text-stone-400">{outfit.components?.length || 0} items</span>
                                   </div>
 
-                                  <div className="p-4 flex-1 space-y-4">
-                                     <div className="space-y-3">
-                                        {outfit.components && outfit.components.map((comp, cIdx) => (
-                                          <div key={cIdx} className="flex flex-col gap-2 p-3 rounded-xl bg-white border border-stone-100 hover:border-stone-200 transition-colors shadow-sm">
-                                              <div className="flex items-start gap-3">
-                                                <div className="w-10 h-10 rounded-full bg-stone-100 flex items-center justify-center shrink-0">
-                                                    <Layers size={16} className="text-stone-500" />
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-xs font-bold text-stone-400 uppercase tracking-wide mb-0.5">{comp.category}</p>
-                                                    <h5 className="text-sm font-semibold text-stone-900 leading-snug truncate">{comp.name}</h5>
-                                                    <p className="text-xs text-stone-500 truncate">{comp.brand} • {comp.price}</p>
-                                                </div>
-                                                <div className="flex flex-col gap-1">
-                                                    {/* Force Absolute URL or Show Error */}
-                                                    {comp.purchaseUrl && comp.purchaseUrl.startsWith('http') ? (
-                                                        <a 
-                                                            href={comp.purchaseUrl}
-                                                            target="_blank" 
-                                                            rel="noopener noreferrer"
-                                                            className="self-center p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
-                                                            title="Buy Item"
-                                                        >
-                                                            <ExternalLink size={16} />
-                                                        </a>
-                                                    ) : (
-                                                        <div className="self-center p-2 text-red-300 cursor-not-allowed" title="Link Unavailable">
-                                                            <ExternalLink size={16} />
-                                                        </div>
-                                                    )}
-                                                    
-                                                    {comp.fallbackSearchUrl && (
-                                                      <a 
-                                                        href={comp.fallbackSearchUrl}
-                                                        target="_blank" 
-                                                        rel="noopener noreferrer"
-                                                        className="self-center p-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-lg transition-colors"
-                                                        title="Find Similar (Backup Link)"
-                                                    >
-                                                        <Search size={16} />
-                                                    </a>
-                                                    )}
-                                                </div>
-                                              </div>
-                                              
-                                              {comp.validationNote && (
-                                                  <div className="bg-stone-50 p-2 rounded-lg border border-stone-100">
-                                                      <div className="flex flex-wrap gap-1.5">
-                                                          {comp.validationNote.split('|').map((note, nIdx) => (
-                                                              <span key={nIdx} className="inline-flex items-center gap-1 text-[9px] font-bold text-stone-600 bg-white px-1.5 py-0.5 rounded border border-stone-200 shadow-sm">
-                                                                  <CheckCircle2 size={8} className="text-green-600" /> {note.trim().replace('Verified: ', '')}
-                                                              </span>
-                                                          ))}
+                                  {/* Product Items */}
+                                  <div className="divide-y divide-stone-50">
+                                      {outfit.components && outfit.components.map((comp, cIdx) => (
+                                          <div key={cIdx} className="px-5 py-4">
+                                              <div className="flex items-center gap-4">
+                                                  {/* Product Thumbnail */}
+                                                  <div className="relative shrink-0">
+                                                      {comp.imageUrl ? (
+                                                          <div className="w-20 h-20 rounded-xl bg-stone-50 overflow-hidden border border-stone-100">
+                                                              <img src={comp.imageUrl} alt={comp.name} className="w-full h-full object-cover" />
+                                                          </div>
+                                                      ) : (
+                                                          <div className="w-20 h-20 rounded-xl bg-stone-50 flex items-center justify-center border border-stone-100">
+                                                              <Layers size={20} className="text-stone-300" />
+                                                          </div>
+                                                      )}
+                                                      {/* Verified badge */}
+                                                      <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center shadow-sm border-2 border-white">
+                                                          <Check size={12} className="text-white" strokeWidth={3} />
                                                       </div>
                                                   </div>
-                                              )}
+
+                                                  {/* Product Info */}
+                                                  <div className="flex-1 min-w-0">
+                                                      <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-0.5">{comp.category}</p>
+                                                      <h5 className="text-sm font-bold text-stone-900 leading-snug line-clamp-2">{comp.name}</h5>
+                                                      <div className="flex items-center gap-1.5 mt-1">
+                                                          <span className="text-xs text-stone-500">{comp.brand}</span>
+                                                          <span className="text-xs text-stone-300">•</span>
+                                                          <span className="text-xs font-semibold text-emerald-600">Verified</span>
+                                                      </div>
+                                                      <p className="text-lg font-bold text-emerald-600 mt-1.5">{comp.price || 'Check Site'}</p>
+                                                  </div>
+
+                                                  {/* Action buttons */}
+                                                  <div className="flex flex-col gap-1.5 shrink-0">
+                                                      {comp.purchaseUrl && comp.purchaseUrl.startsWith('http') ? (
+                                                          <a 
+                                                              href={comp.purchaseUrl}
+                                                              target="_blank" 
+                                                              rel="noopener noreferrer"
+                                                              className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-900 text-white hover:bg-stone-700 transition-colors shadow-sm"
+                                                              title="Buy Item"
+                                                          >
+                                                              <ExternalLink size={14} />
+                                                          </a>
+                                                      ) : (
+                                                          <div className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-100 text-stone-300 cursor-not-allowed" title="Link Unavailable">
+                                                              <ExternalLink size={14} />
+                                                          </div>
+                                                      )}
+                                                      {comp.fallbackSearchUrl && (
+                                                          <a 
+                                                              href={comp.fallbackSearchUrl}
+                                                              target="_blank" 
+                                                              rel="noopener noreferrer"
+                                                              className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-50 text-stone-400 hover:bg-stone-100 hover:text-stone-600 transition-colors border border-stone-100"
+                                                              title="Find Similar"
+                                                          >
+                                                              <Search size={14} />
+                                                          </a>
+                                                      )}
+                                                  </div>
+                                              </div>
                                           </div>
-                                        ))}
-                                     </div>
+                                      ))}
                                   </div>
                               </div>
-                          ))}
+                              );
+                          })}
                       </div>
                       
                       {msg.data?.recommendations.length === 0 && (
                           <div className="text-center p-8 bg-white rounded-2xl border border-red-100">
-                              <p className="text-red-600 font-bold mb-2">Forensic Audit Failed</p>
-                              <p className="text-sm text-stone-500">Logistics or aesthetic audits rejected all potential combinations. Please relax constraints.</p>
+                              <p className="text-red-600 font-bold mb-2">No Results Found</p>
+                              <p className="text-sm text-stone-500">We couldn't find matching items. Try relaxing your search criteria or budget.</p>
                           </div>
                       )}
                   </div>

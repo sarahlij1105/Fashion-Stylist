@@ -62,6 +62,7 @@ export interface StylistOutfit {
   logic: string;           // Detailed reasoning citing specific style guide rules
   body_type_notes?: string; // How silhouette was balanced
   recommendations: StylistOutfitItem[];
+  heroImageBase64?: string; // AI-generated flat-lay hero image for this outfit
 }
 
 export interface ProfessionalStylistResponse {
@@ -109,6 +110,7 @@ export interface OutfitComponent {
   purchaseUrl: string;
   validationNote?: string;
   fallbackSearchUrl?: string;
+  imageUrl?: string; // Product thumbnail from SerpApi
 }
 
 export interface RecommendationItem {

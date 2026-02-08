@@ -658,6 +658,86 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
 };
 
 /**
+ * OUTFIT HERO IMAGE GENERATOR (Nano Banana - Gemini 2.5 Flash Image)
+ * Generates a single flat-lay product photography composition for an outfit.
+ * Uses the fast model for speed — 3 parallel calls = ~10-15s total.
+ */
+export const generateOutfitHeroImage = async (
+    outfit: StylistOutfit
+): Promise<string | null> => {
+    try {
+        const itemDescriptions = outfit.recommendations.map(rec => 
+            `- ${rec.item_name} (${rec.category}${rec.color_role ? `, ${rec.color_role}` : ''})`
+        ).join('\n');
+
+        const prompt = `You are an expert fashion product photographer. Generate a high-fidelity, commercial flat-lay photograph of the following outfit items arranged together on a clean surface.
+
+**Style Constraints (Strict):**
+1. Background: Solid, neutral off-white/cream studio background. Seamless and clean.
+2. Composition: Flat-lay arrangement of ALL items below, neatly organized as a complete outfit. Items should be arranged naturally as they would be worn — top above bottom, shoes below, accessories to the side.
+3. Lighting: Soft, professional studio lighting highlighting fabric textures and true colors. No harsh shadows.
+4. Vibe: Minimalist, high-end e-commerce aesthetic. Similar to Zara or COS lookbook flat-lays.
+5. Do NOT show any human body, head, limbs, or mannequin. Items only.
+6. Each item should be clearly visible and identifiable.
+
+**Outfit: "${outfit.name}"**
+Items to include:
+${itemDescriptions}
+
+Generate this flat-lay product photograph now.`;
+
+        const response = await generateContentWithRetry(
+            'gemini-2.5-flash-image',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: {
+                    responseModalities: ['TEXT', 'IMAGE'],
+                    imageConfig: { aspectRatio: '3:4' }
+                }
+            }
+        );
+
+        // Extract the image from the response parts
+        const candidates = (response as any).candidates;
+        if (candidates?.[0]?.content?.parts) {
+            for (const part of candidates[0].content.parts) {
+                if (part.inlineData?.data) {
+                    return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+                }
+            }
+        }
+
+        console.warn("Hero image generation returned no image data");
+        return null;
+    } catch (e) {
+        console.error("Hero Image Generation Failed:", e);
+        return null;
+    }
+};
+
+/**
+ * Generate hero images for all outfits in parallel.
+ * Non-blocking — if any fails, that outfit just won't have an image.
+ */
+export const generateAllOutfitHeroImages = async (
+    outfits: StylistOutfit[]
+): Promise<StylistOutfit[]> => {
+    console.log(`>> Generating ${outfits.length} hero images in parallel...`);
+    const startTime = performance.now();
+
+    const imagePromises = outfits.map(async (outfit) => {
+        const imageBase64 = await generateOutfitHeroImage(outfit);
+        return { ...outfit, heroImageBase64: imageBase64 || undefined };
+    });
+
+    const results = await Promise.all(imagePromises);
+    const successCount = results.filter(o => o.heroImageBase64).length;
+    console.log(`>> Hero images complete: ${successCount}/${outfits.length} succeeded (${(performance.now() - startTime).toFixed(0)}ms)`);
+    
+    return results;
+};
+
+/**
  * SEARCH QUERY GENERATOR (Gemini 3 Pro)
  * Takes a confirmed stylist outfit and generates optimized SerpApi search strings per item.
  */
@@ -822,7 +902,8 @@ export const searchWithStylistQueries = async (
                         price: item.price,
                         purchaseUrl: item.purchaseUrl,
                         validationNote: `Verified ✓`,
-                        fallbackSearchUrl: item.fallbackSearchUrl
+                        fallbackSearchUrl: item.fallbackSearchUrl,
+                        imageUrl: item.image || undefined
                     }))
                 });
             }
