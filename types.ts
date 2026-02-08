@@ -3,9 +3,6 @@ export enum AppStep {
   PROFILE_MANUAL = 'PROFILE_MANUAL', // New step for manual profile entry (no photo)
   UPLOAD_PHOTO = 'UPLOAD_PHOTO',
   ITEM_TYPE = 'ITEM_TYPE',
-  OCCASION = 'OCCASION',
-  STYLE = 'STYLE',
-  COLOR = 'COLOR',
   CONFIRMATION = 'CONFIRMATION', // New step for verifying AI analysis
   PREFERENCES_DASHBOARD = 'PREFERENCES_DASHBOARD', // Replaces OCCASION, STYLE, COLOR, PRICE_RANGE
   OCCASION = 'OCCASION', // Deprecated but kept for type safety if needed
