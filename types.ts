@@ -13,6 +13,10 @@ export enum AppStep {
   IDEAL_STYLE = 'IDEAL_STYLE',
   SEARCHING = 'SEARCHING',
   RESULTS = 'RESULTS',
+  // New Card 1 Flow Steps
+  CARD1_DETAILS = 'CARD1_DETAILS',
+  CARD1_PROFILE = 'CARD1_PROFILE',
+  CARD1_CONFIRM = 'CARD1_CONFIRM',
 }
 
 export enum FashionPurpose {

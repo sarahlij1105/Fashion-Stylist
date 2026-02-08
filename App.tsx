@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
-import { analyzeUserPhoto, searchAndRecommend } from './services/geminiService';
+import { analyzeUserPhoto, searchAndRecommend, searchAndRecommendCard1 } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle } from 'lucide-react';
@@ -100,6 +100,9 @@ export default function App() {
   const [maxPrice, setMaxPrice] = useState<number | string>(1000);
 
   const [searchQuery, setSearchQuery] = useState(''); // For Landing & Refinement
+
+  // --- CARD 1 FLOW STATE ---
+  const [card1AnalysisPromise, setCard1AnalysisPromise] = useState<Promise<StyleAnalysisResult> | null>(null);
 
   useEffect(() => {
     // Mount effect
@@ -335,7 +338,7 @@ export default function App() {
         }
     }
 
-    if (step === AppStep.CONFIRMATION) {
+    if (step === AppStep.CONFIRMATION || step === AppStep.CARD1_CONFIRM) {
        // Sync Confirmed Data to Preferences
        if (styleAnalysisResults) {
            const topStyle = styleAnalysisResults.suggestedStyles?.map(s => s.name).join(' OR ');
@@ -351,6 +354,12 @@ export default function App() {
                occasion: prev.occasion || "General" 
            }));
        }
+       
+       if (step === AppStep.CARD1_CONFIRM) {
+           handleCard1Search();
+           return;
+       }
+
        // Skip Occasion/Style/Color -> Jump to Dashboard
        setStep(AppStep.PREFERENCES_DASHBOARD);
        return;
@@ -410,7 +419,233 @@ export default function App() {
     );
   };
 
+  const handleCard1Search = async () => {
+    setStep(AppStep.SEARCHING);
+    setIsLoading(true);
+
+    try {
+      // Use the specialized pipeline
+      const result = await searchAndRecommendCard1(profile, preferences, styleAnalysisResults || undefined);
+      const newMsg: ChatMessage = {
+        role: 'model',
+        content: result.reflectionNotes,
+        data: result
+      };
+      setMessages(prev => [...prev, newMsg]);
+      setStep(AppStep.RESULTS);
+    } catch (e) {
+      console.error(e);
+      alert(`Something went wrong during the styling search. Error: ${e instanceof Error ? e.message : String(e)}`);
+      setStep(AppStep.GOAL_SELECTION);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // --- Render Steps ---
+
+  // PAGE 1A: Categories & Photos
+  const renderCard1Details = () => {
+      const types = ["Dress", "Top", "Bottom", "Shoes", "Outerwear", "Handbags", "Hair Accessories", "Jewelries"];
+      
+      const onNext = () => {
+          // Trigger Analysis in Background
+          if (profile.idealStyleImages.length > 0) {
+              const promise = runStyleExampleAnalyzer(profile, preferences);
+              setCard1AnalysisPromise(promise);
+              // We don't await here, we move to next page
+          }
+          setStep(AppStep.CARD1_PROFILE);
+      };
+
+      return (
+        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">What items to include?</h1>
+          <p className="text-stone-500 mb-6 text-sm">Select all that apply</p>
+
+          <div className="grid grid-cols-2 gap-3 mb-8">
+             {types.map(type => {
+               const isSelected = selectedItemTypes.includes(type);
+               return (
+                 <button
+                   key={type}
+                   onClick={() => toggleItemType(type)}
+                   className={`p-4 rounded-xl border text-sm font-bold transition-all ${isSelected ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 bg-white text-stone-900 hover:border-stone-300'}`}
+                 >
+                   {type}
+                 </button>
+               )
+             })}
+          </div>
+
+          <h2 className="text-xl font-bold font-sans text-stone-900 mb-2">Example Photos</h2>
+          <p className="text-stone-500 mb-6 text-sm">Upload up to 3 photos of the style you want</p>
+
+          <div className="grid grid-cols-3 gap-2 mb-6">
+             {profile.idealStyleImages.map((img, idx) => (
+                 <div key={idx} className="relative aspect-square bg-stone-100 rounded-xl overflow-hidden border border-stone-200">
+                     <img src={img} alt={`Example ${idx+1}`} className="w-full h-full object-cover" />
+                     <button 
+                        onClick={() => removeIdealImage(idx)}
+                        className="absolute top-1 right-1 bg-white/90 p-1 rounded-full shadow-sm hover:bg-white text-stone-500 hover:text-red-500"
+                     >
+                        <X size={12} />
+                     </button>
+                 </div>
+             ))}
+             
+             {profile.idealStyleImages.length < 3 && (
+                 <label className="aspect-square bg-stone-50 border-2 border-dashed border-stone-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-stone-100 transition-all text-stone-400 hover:text-stone-600">
+                     <Plus size={24} />
+                     <input 
+                        type="file" 
+                        className="hidden" 
+                        multiple
+                        accept="image/*"
+                        onChange={handleIdealStyleUpload}
+                     />
+                 </label>
+             )}
+          </div>
+
+          <NavigationButtons 
+            onContinue={onNext} 
+            onBack={() => setStep(AppStep.GOAL_SELECTION)}
+            disabled={selectedItemTypes.length === 0 || profile.idealStyleImages.length === 0}
+            continueLabel="Analyze & Continue"
+          />
+        </div>
+      );
+  };
+
+  // PAGE 1B: Budget & Profile
+  const renderCard1Profile = () => {
+      // Re-use renderPriceRange logic partially but inline for simplicity or reuse components?
+      // Let's implement a simplified version as per request "Just a few more questions..."
+      
+      const [useManual, setUseManual] = useState(false);
+
+      return (
+        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Just a few more questions...</h1>
+          
+          {/* Budget */}
+          <div className="mb-8">
+              <label className="block text-sm font-bold text-stone-900 mb-2">What's your budget?</label>
+              <div className="flex items-center gap-2">
+                  <span className="text-stone-400 font-bold">$</span>
+                  <input 
+                      type="number" 
+                      value={maxPrice}
+                      onChange={(e) => setMaxPrice(e.target.value)}
+                      className="flex-1 p-4 bg-white border border-stone-200 rounded-xl font-bold outline-none focus:border-stone-900"
+                      placeholder="Max Budget"
+                  />
+              </div>
+          </div>
+
+          {/* Size/Gender */}
+          <div className="mb-8">
+              <label className="block text-sm font-bold text-stone-900 mb-4">Size & Fit</label>
+              
+              <div className="flex gap-4 mb-4">
+                  <button 
+                    onClick={() => setUseManual(false)}
+                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${!useManual ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
+                  >
+                    AI Estimate
+                  </button>
+                  <button 
+                    onClick={() => setUseManual(true)}
+                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${useManual ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
+                  >
+                    Manual Input
+                  </button>
+              </div>
+
+              {useManual ? (
+                  <div className="space-y-4 animate-fade-in">
+                      <select 
+                         value={profile.gender}
+                         onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
+                         className="w-full p-4 bg-white border border-stone-200 rounded-xl outline-none"
+                      >
+                          <option value="Female">Female</option>
+                          <option value="Male">Male</option>
+                      </select>
+                      <input 
+                         placeholder="Size (e.g. M, US 6)"
+                         value={profile.estimatedSize}
+                         onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
+                         className="w-full p-4 bg-white border border-stone-200 rounded-xl outline-none"
+                      />
+                  </div>
+              ) : (
+                  <div className="animate-fade-in">
+                      <div className="bg-stone-100 rounded-xl p-4 flex items-center justify-center border-2 border-dashed border-stone-200 relative min-h-[150px]">
+                          {profile.userImageBase64 ? (
+                              <img src={profile.userImageBase64} className="h-32 object-contain rounded" />
+                          ) : (
+                              <label className="flex flex-col items-center cursor-pointer text-stone-400">
+                                  <Camera size={24} className="mb-2"/>
+                                  <span className="text-xs font-bold">Upload Body Photo</span>
+                                  <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, 'userImageBase64')} />
+                              </label>
+                          )}
+                      </div>
+                      {profile.estimatedSize && !isLoading && (
+                          <div className="mt-2 text-xs font-bold text-green-600 flex items-center gap-1">
+                              <CheckCircle2 size={12} /> Estimated: {profile.estimatedSize}
+                          </div>
+                      )}
+                  </div>
+              )}
+          </div>
+
+          <NavigationButtons 
+            onContinue={() => setStep(AppStep.CARD1_CONFIRM)} 
+            onBack={() => setStep(AppStep.CARD1_DETAILS)}
+            continueLabel="Review Analysis"
+          />
+        </div>
+      );
+  };
+
+  // PAGE 1C: Confirmation
+  const renderCard1Confirm = () => {
+      // Check if analysis is ready
+      useEffect(() => {
+          if (card1AnalysisPromise) {
+              setIsLoading(true);
+              card1AnalysisPromise.then(result => {
+                  setStyleAnalysisResults(result);
+                  setIsLoading(false);
+              }).catch(e => {
+                  console.error("Analysis failed", e);
+                  setIsLoading(false);
+              });
+          }
+      }, []);
+
+      if (isLoading && !styleAnalysisResults) {
+          return (
+              <div className="flex flex-col items-center justify-center h-screen">
+                  <div className="animate-spin w-12 h-12 border-4 border-stone-200 border-t-stone-900 rounded-full mb-4"></div>
+                  <p className="text-stone-500 font-bold animate-pulse">Analyzing your style...</p>
+              </div>
+          );
+      }
+
+      return renderConfirmation(); // Re-use existing confirmation page? 
+      // The user wants a specific list: Style, Color, Features.
+      // The existing renderConfirmation does exactly this (Styles, Colors).
+      // But we might want to show "Basics" too?
+      // Existing confirmation shows "Detected Aesthetics" and "Detected Palette".
+      // Let's reuse it for now, but override the "Continue" action.
+      // Actually, I need to inject the "Basics" list if possible.
+      // `renderConfirmation` reads from `styleAnalysisResults`.
+      // I'll just use `renderConfirmation` but wrap the `onContinue` in `nextStep` to handle `CARD1_CONFIRM`.
+  };
 
   const renderLanding = () => (
     <div className="max-w-md mx-auto px-6 pt-12 animate-fade-in pb-32">
@@ -436,11 +671,11 @@ export default function App() {
        </div>
 
        <div className="grid grid-cols-1 gap-4">
-          {/* Card 1: Style Clone */}
+          {/* Card 1: Style Clone (New Flow) */}
           <button
              onClick={() => {
-                 setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING})); // Or new purpose
-                 setStep(AppStep.UPLOAD_PHOTO); // Jump to Vision
+                 setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING})); 
+                 setStep(AppStep.CARD1_DETAILS); // New Entry Point
              }}
              className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
           >
@@ -553,7 +788,7 @@ export default function App() {
 
 
   const renderUploadPhoto = () => {
-    const isHeic = profile.userImageBase64?.toLowerCase().includes('image/heic') || profile.userImageBase64?.toLowerCase().includes('image/heif');
+    const isHeic = profile.userImageBase64 ? (profile.userImageBase64.toLowerCase().includes('image/heic') || profile.userImageBase64.toLowerCase().includes('image/heif')) : false;
     const [heightVal, setHeightVal] = useState('');
     const [heightUnit, setHeightUnit] = useState('cm');
 
@@ -1259,8 +1494,14 @@ export default function App() {
 
           <NavigationButtons 
             onContinue={nextStep} 
-            onBack={() => setStep(AppStep.IDEAL_STYLE)}
-            continueLabel="Confirm & Continue"
+            onBack={() => {
+                if (step === AppStep.CARD1_CONFIRM) {
+                    setStep(AppStep.CARD1_PROFILE);
+                } else {
+                    setStep(AppStep.IDEAL_STYLE);
+                }
+            }}
+            continueLabel={step === AppStep.CARD1_CONFIRM ? "Find My Style" : "Confirm & Continue"}
           />
         </div>
     );
@@ -1485,7 +1726,11 @@ export default function App() {
             {step === AppStep.ITEM_TYPE && renderItemType()}
             {step === AppStep.UPLOAD_PHOTO && renderUploadPhoto()}
             {step === AppStep.PROFILE_MANUAL && renderProfileManual()}
-            {/* New Order: Ideal Style -> Confirmation -> (Maybe Skip) -> Occasion... */}
+            {/* Card 1 Flow */}
+            {step === AppStep.CARD1_DETAILS && renderCard1Details()}
+            {step === AppStep.CARD1_PROFILE && renderCard1Profile()}
+            {step === AppStep.CARD1_CONFIRM && renderCard1Confirm()}
+            {/* Standard Flow */}
             {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
             {step === AppStep.CONFIRMATION && renderConfirmation()}
             {step === AppStep.PREFERENCES_DASHBOARD && renderPreferencesDashboard()}

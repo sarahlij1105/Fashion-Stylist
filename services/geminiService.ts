@@ -368,3 +368,117 @@ export const searchAndRecommend = async (
     throw error;
   }
 };
+
+/**
+ * SPECIALIZED PIPELINE FOR CARD 1 (Style Clone)
+ * - Disables Verification Agent (Curator)
+ * - Disables Composer Agent
+ * - Returns Top 3 Items per Category
+ */
+export const searchAndRecommendCard1 = async (
+  profile: UserProfile,
+  preferences: Preferences,
+  providedStyleAnalysis?: StyleAnalysisResult
+): Promise<StylistResponse> => {
+  const startTimeTotal = performance.now();
+  const timings: string[] = [];
+  const logMessages: string[] = [];
+
+  try {
+    const categories = preferences.itemType.split(',').map(t => t.trim()).filter(t => t);
+    const today = new Date().toLocaleDateString();
+    
+    // Use provided analysis (should be available from Page 1C)
+    const styleAnalysis = providedStyleAnalysis;
+
+    console.log("--- STARTING CARD 1 PIPELINE (No Verification, No Composer) ---");
+
+    const pipelinePromises = categories.map(async (category) => {
+        const catStart = performance.now();
+        
+        // 1. Procurement (Micro-Agent)
+        const t0 = performance.now();
+        // Path instruction is simple for Card 1
+        const pathInstruction = `Find ${category} matching the analyzed style.`;
+        const procurementResult = await runCategoryMicroAgent(category, profile, preferences, pathInstruction, today, styleAnalysis);
+        const t1 = performance.now();
+        const procDuration = (t1 - t0).toFixed(0);
+        
+        const procLog = `[${category}] Criteria: "${procurementResult.searchCriteria}" | Found: ${procurementResult.initialCandidateCount} | Verified (Procurement): ${procurementResult.items.length} (${procDuration}ms)`;
+        
+        // 2. SKIP Verification (Curator) - As requested
+        // We just pass procurement items as "validated"
+        const verItems = procurementResult.items;
+        const verLog = `[${category}] Verification (Curator): SKIPPED (Testing Mode)`;
+
+        // 3. Scoring
+        const t4 = performance.now();
+        // Wrap in expected structure for scorer
+        const inputForScorer = { validatedItems: { [category]: verItems } };
+        const scoringResult = await runStylistScoringStep(inputForScorer, preferences, styleAnalysis);
+        const t5 = performance.now();
+        const scoreDuration = (t5 - t4).toFixed(0);
+        
+        const scoredItems = scoringResult.scoredItems?.[category] || [];
+        
+        // Sort by score descending and take top 3
+        const top3 = scoredItems
+            .sort((a: any, b: any) => (b.visualMatchScore || 0) - (a.visualMatchScore || 0))
+            .slice(0, 3);
+
+        const scoreLog = `[${category}] Scoring: Input ${verItems.length} -> Scored ${scoredItems.length} -> Top 3 Kept (${scoreDuration}ms)`;
+        
+        const catEnd = performance.now();
+        const totalCatDuration = (catEnd - catStart).toFixed(0);
+        
+        const logs = [procLog, verLog, scoreLog];
+        if (procurementResult.debugLogs) logs.push(...procurementResult.debugLogs);
+
+        return { 
+            category, 
+            topItems: top3,
+            logs,
+            timing: `Pipeline (${category}): ${totalCatDuration}ms`
+        };
+    });
+
+    const pipelineResults = await Promise.all(pipelinePromises);
+    
+    // Construct Recommendations (1 per category)
+    const recommendations: RecommendationItem[] = [];
+    
+    pipelineResults.forEach(res => {
+        logMessages.push(...res.logs);
+        timings.push(res.timing);
+        
+        if (res.topItems.length > 0) {
+            recommendations.push({
+                name: `Top Picks: ${res.category}`,
+                description: `Best matches for your style analysis.`,
+                components: res.topItems.map((item: any) => ({
+                    category: res.category,
+                    name: item.name,
+                    brand: item.source || "Unknown",
+                    price: item.price,
+                    purchaseUrl: item.purchaseUrl,
+                    validationNote: `Score: ${item.visualMatchScore}`,
+                    fallbackSearchUrl: item.fallbackSearchUrl
+                }))
+            });
+        }
+    });
+
+    const totalTime = (performance.now() - startTimeTotal).toFixed(0);
+    const telemetry = `\n--- CARD 1 TELEMETRY ---\n${timings.join('\n')}\nTotal Latency: ${totalTime}ms\n\n`;
+    const reflectionNotes = logMessages.join('\n') + "\n\n" + telemetry;
+
+    return {
+        recommendations,
+        reflectionNotes
+    };
+
+  } catch (error) {
+    console.error("Error in Card 1 Orchestrator:", error);
+    throw error;
+  }
+};
