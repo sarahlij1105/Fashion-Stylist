@@ -50,7 +50,7 @@ interface NavigationButtonsProps {
 }
 
 const NavigationButtons: React.FC<NavigationButtonsProps> = ({ onContinue, disabled = false, showBack = true, onBack, continueLabel = "Continue" }) => (
-  <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-10">
+  <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-50">
     <div className="max-w-md mx-auto flex items-center justify-between px-4">
        {showBack && (
           <button 
@@ -2860,7 +2860,8 @@ export default function App() {
   };
 
   // --- BOTTOM NAVIGATION BAR ---
-  const showBottomNav = step !== AppStep.SEARCHING && step !== AppStep.CARD1_CHAT && step !== AppStep.RESULTS && step !== AppStep.CARD2_RECOMMENDATION;
+  // Only show BottomNav on landing page and profile pages — hide on all wizard/flow pages
+  const showBottomNav = step === AppStep.GOAL_SELECTION || step === AppStep.PROFILE_SETUP || step === AppStep.PROFILE_VIEW;
   const isProfilePage = step === AppStep.PROFILE_SETUP || step === AppStep.PROFILE_VIEW;
   const isHomePage = !isProfilePage;
 
