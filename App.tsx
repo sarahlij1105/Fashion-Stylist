@@ -103,8 +103,8 @@ export default function App() {
 
   const [selectedItemTypes, setSelectedItemTypes] = useState<string[]>([]);
   const [customItemType, setCustomItemType] = useState<string>('');
-  const [minPrice, setMinPrice] = useState<number | string>(210);
-  const [maxPrice, setMaxPrice] = useState<number | string>(1000);
+  const [minPrice, setMinPrice] = useState<number | string>('');
+  const [maxPrice, setMaxPrice] = useState<number | string>('');
 
   const [searchQuery, setSearchQuery] = useState(''); // For Landing & Refinement
 
@@ -144,6 +144,7 @@ export default function App() {
 
   // Hoisted ref for chat container auto-scroll
   const chatContainerRef = React.useRef<HTMLDivElement>(null);
+  const prevChatMessageCountRef = React.useRef<number>(0);
 
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
@@ -207,10 +208,22 @@ export default function App() {
         return t;
     }).filter(t => t.length > 0 && t !== 'Other');
 
+    // Build priceRange string based on which fields are filled
+    let priceRange = '';
+    const hasMin = minPrice !== '' && Number(minPrice) > 0;
+    const hasMax = maxPrice !== '' && Number(maxPrice) > 0;
+    if (hasMin && hasMax) {
+        priceRange = `$${minPrice} - $${maxPrice}`;
+    } else if (hasMin) {
+        priceRange = `From $${minPrice}`;
+    } else if (hasMax) {
+        priceRange = `Under $${maxPrice}`;
+    }
+
     setPreferences(prev => ({
       ...prev,
       itemType: processedItemTypes.join(', '),
-      priceRange: `$${minPrice} - $${maxPrice}`
+      priceRange
     }));
   }, [selectedItemTypes, customItemType, minPrice, maxPrice]);
 
@@ -221,12 +234,21 @@ export default function App() {
       }
   }, [heightVal, heightUnit]);
 
-  // Hoisted from renderCard1Chat - auto-scroll chat on new messages
+  // Hoisted from renderCard1Chat - auto-scroll chat only when NEW messages are added
   useEffect(() => {
-      if (chatContainerRef.current) {
+      if (chatContainerRef.current && chatMessages.length > prevChatMessageCountRef.current) {
           chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
       }
+      prevChatMessageCountRef.current = chatMessages.length;
   }, [chatMessages]);
+
+  // Reset chat scroll position to top when navigating to a new step
+  useEffect(() => {
+      if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = 0;
+      }
+      prevChatMessageCountRef.current = chatMessages.length;
+  }, [step]);
 
   // Hoisted from renderCard1Confirm - resolve analysis promise when it changes
   useEffect(() => {
@@ -668,6 +690,14 @@ export default function App() {
   const renderCard1Details = () => {
       const onNext = async () => {
           // Start analysis and go directly to chat
+          // Clear all shared state from other card flows
+          setChatMessages([]);
+          setChatInput('');
+          setStylistOutfits([]);
+          setSelectedOutfitIndex(null);
+          setCard3Plan(null);
+          setIsGeneratingRecs(false);
+
           setStep(AppStep.CARD1_CHAT);
           setIsLoading(true);
           try {
@@ -739,18 +769,28 @@ export default function App() {
           {/* Budget Section */}
           <div className="mb-8">
             <p className="text-sm text-stone-400 mb-2">What's your budget?</p>
-            <div className="flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
-              <span className="text-stone-400 font-medium mr-2">$</span>
-              <input 
-                type="number"
-                value={maxPrice}
-                onChange={(e) => {
-                    setMaxPrice(e.target.value);
-                    setPreferences(prev => ({ ...prev, priceRange: e.target.value ? `Under $${e.target.value}` : '' }));
-                }}
-                className="flex-1 outline-none text-stone-900 font-medium bg-transparent"
-                placeholder="500"
-              />
+            <div className="flex items-center gap-3">
+              <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
+                <span className="text-stone-400 font-medium mr-2">$</span>
+                <input 
+                  type="number"
+                  value={minPrice}
+                  onChange={(e) => setMinPrice(e.target.value)}
+                  className="w-full outline-none text-stone-900 font-medium bg-transparent"
+                  placeholder="Min"
+                />
+              </div>
+              <span className="text-stone-400 text-sm">to</span>
+              <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
+                <span className="text-stone-400 font-medium mr-2">$</span>
+                <input 
+                  type="number"
+                  value={maxPrice}
+                  onChange={(e) => setMaxPrice(e.target.value)}
+                  className="w-full outline-none text-stone-900 font-medium bg-transparent"
+                  placeholder="Max"
+                />
+              </div>
             </div>
           </div>
 
@@ -2101,18 +2141,28 @@ export default function App() {
               {/* Budget */}
               <div className="mb-6">
                   <p className="text-sm text-stone-400 mb-2">What's your budget?</p>
-                  <div className="flex items-center border border-stone-200 rounded-xl px-4 py-3 bg-white">
-                      <span className="text-stone-400 font-medium mr-2">$</span>
-                      <input 
-                          type="number"
-                          value={maxPrice}
-                          onChange={(e) => {
-                              setMaxPrice(e.target.value);
-                              setPreferences(prev => ({ ...prev, priceRange: e.target.value ? `Under $${e.target.value}` : '' }));
-                          }}
-                          className="flex-1 outline-none text-stone-900 font-medium bg-transparent"
-                          placeholder="0"
-                      />
+                  <div className="flex items-center gap-3">
+                      <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3 bg-white">
+                          <span className="text-stone-400 font-medium mr-2">$</span>
+                          <input 
+                              type="number"
+                              value={minPrice}
+                              onChange={(e) => setMinPrice(e.target.value)}
+                              className="w-full outline-none text-stone-900 font-medium bg-transparent"
+                              placeholder="Min"
+                          />
+                      </div>
+                      <span className="text-stone-400 text-sm">to</span>
+                      <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3 bg-white">
+                          <span className="text-stone-400 font-medium mr-2">$</span>
+                          <input 
+                              type="number"
+                              value={maxPrice}
+                              onChange={(e) => setMaxPrice(e.target.value)}
+                              className="w-full outline-none text-stone-900 font-medium bg-transparent"
+                              placeholder="Max"
+                          />
+                      </div>
                   </div>
               </div>
 
@@ -2379,6 +2429,10 @@ export default function App() {
       setChatMessages([]);
       setChatInput('');
       setCard3Plan(null);
+      setStylistOutfits([]);
+      setSelectedOutfitIndex(null);
+      setStyleAnalysisResults(null);
+      setIsGeneratingRecs(false);
 
       try {
           const plan = await generateOccasionPlan(occasion, profile);

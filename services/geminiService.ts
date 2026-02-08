@@ -589,10 +589,11 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
 **CRITICAL OUTPUT RULES:**
 - Create exactly **3 distinct outfit options** that the user can choose from.
 - Each outfit should have a different personality (e.g., one classic, one trendy, one bold).
+- **ONLY recommend items in the categories listed in "Looking For" above.** Do NOT add extra categories (e.g., if the user only wants "Bottom, Footwear", do NOT add outerwear, accessories, or handbags). Each outfit's recommendations array must ONLY contain items from the requested categories.
 - For each item in the outfit, generate a **serp_query** — this is a Google Shopping search string. It must include: gender + color + material + item type + key feature. Example: "women's cream silk wide-leg trousers high-waisted".
 - Each item's **style_reason** must cite a SPECIFIC rule from the guide (e.g., "60-30-10 Rule: charcoal is your 60% base", "Hard-Soft Rule: silk against your denim jacket").
 - The **logic** field must walk through the 7-step workflow and explain the reasoning.
-- If the user has kept items, those items should NOT appear in your recommendations (they already own them). Only recommend NEW items to buy.
+- If the user has kept items, those items should NOT appear in your recommendations (they already own them). Only recommend NEW items in the requested categories.
 
 **OUTPUT FORMAT (Strict JSON):**
 {

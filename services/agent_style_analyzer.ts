@@ -133,8 +133,11 @@ export const runStyleExampleAnalyzer = async (
     - Return the ID, Name, and a short reason for each match.
 
     **STEP 2: Color Detection**
-    - Extract the *dominant* colors of the clothing items in the photos.
-    - Ignore background colors.
+    ${hasRequestedItems 
+        ? `- Extract the *dominant* colors ONLY from the following items: ${preferences.itemType}. 
+    - IGNORE the colors of any other clothing items in the photo that are NOT in the list above.`
+        : `- Extract the *dominant* colors of the clothing items in the photos.`}
+    - Ignore background colors, skin tones, and non-clothing elements.
     - Return a simple list of color names (e.g., "Navy Blue", "Cream", "Burgundy").
 
     **STEP 3: Component Detection**
