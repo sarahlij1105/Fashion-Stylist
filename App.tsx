@@ -634,8 +634,12 @@ export default function App() {
                   console.error("Analysis failed", e);
                   setIsLoading(false);
               });
+          } else {
+             // Fallback if promise is missing (shouldn't happen if flow is followed)
+             // Maybe redirect or just stop loading?
+             setIsLoading(false);
           }
-      }, []);
+      }, [card1AnalysisPromise]);
 
       // Show loading state if analysis is running OR if results aren't ready yet
       if (isLoading || !styleAnalysisResults) {
@@ -1634,14 +1638,14 @@ export default function App() {
                       <button
                           key={type}
                           onClick={() => {
-                              const current = preferences.itemType ? preferences.itemType.split(', ') : [];
+                              const current = (preferences.itemType || '').split(', ').filter(Boolean);
                               const updated = current.includes(type)
                                   ? current.filter(t => t !== type)
                                   : [...current, type];
                               setPreferences(p => ({ ...p, itemType: updated.join(', ') }));
                           }}
                           className={`px-4 py-2 rounded-full text-sm border transition-all ${
-                              preferences.itemType.includes(type)
+                              (preferences.itemType || '').includes(type)
                                   ? 'bg-stone-900 text-white border-stone-900'
                                   : 'bg-white text-stone-600 border-stone-200 hover:border-stone-400'
                           }`}
