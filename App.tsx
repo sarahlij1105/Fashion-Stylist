@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, runChatRefinement, resolveItemCategory } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, generateOccasionPlan, runChatRefinement, resolveItemCategory } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote } from 'lucide-react';
@@ -37,6 +37,8 @@ const WIZARD_STEPS = [
   AppStep.PREFERENCES_DASHBOARD, // New consolidated step
   AppStep.CARD2_DETAILS,
   AppStep.CARD2_RECOMMENDATION,
+  AppStep.CARD3_OCCASION,
+  AppStep.CARD3_CHAT,
   AppStep.SEARCHING,
   AppStep.RESULTS,
 ];
@@ -136,6 +138,8 @@ export default function App() {
   const [searchCriteria, setSearchCriteria] = useState<SearchCriteria>(defaultSearchCriteria);
   const [chatMessages, setChatMessages] = useState<RefinementChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [card3OccasionInput, setCard3OccasionInput] = useState('');
+  const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; summary: string } | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
 
   // Hoisted ref for chat container auto-scroll
@@ -1044,7 +1048,7 @@ export default function App() {
           <button
              onClick={() => {
                  setPreferences(p => ({...p, purpose: FashionPurpose.NEW_OUTFIT}));
-                 setStep(AppStep.ITEM_TYPE); // Start standard flow
+                 setStep(AppStep.CARD3_OCCASION);
              }}
              className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
           >
@@ -1879,61 +1883,86 @@ export default function App() {
       }
   };
 
+  // Auto-analyze photo when uploaded for Card 2
+  const handleCard2PhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      await handleFileUpload(e, 'userImageBase64', true);
+      
+      // After photo is set, run vision analysis to detect items
+      // We need to wait a tick for state to update
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setIsAnalyzingCard2(true);
+      try {
+          // Read the file to get base64 for analysis (handleFileUpload already does this, 
+          // but we need the value immediately)
+          const reader = new FileReader();
+          const base64 = await new Promise<string>((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(file);
+          });
+          
+          const analysis = await analyzeUserPhoto(base64, preferences.purpose, profile.height);
+          const detected = analysis.keptItems || [];
+          setKeptItems(detected);
+          setProfile(prev => ({
+              ...prev,
+              gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
+              estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
+              currentStyle: analysis.currentStyle || prev.currentStyle,
+              keptItems: detected
+          }));
+      } catch (err) {
+          console.error('Vision analysis failed:', err);
+          setKeptItems([]);
+      } finally {
+          setIsAnalyzingCard2(false);
+      }
+  };
+
   const renderCard2Details = () => {
       const itemTypes = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Footwear', 'Handbags', 'Hair Accessories', 'Jewelries'];
 
       const onCard2Continue = async () => {
           if (!profile.userImageBase64) return;
           
-          // Remember what user wants to search for
           const searchingFor = [...selectedItemTypes];
+          const currentKeptItems = [...keptItems];
           
-          // Run analysis + stylist recs, then go to recommendations page
           setStep(AppStep.CARD2_RECOMMENDATION);
           setIsGeneratingRecs(true);
-          
-          // Initialize chat with loading state
           setChatMessages([]);
           setChatInput('');
           
           try {
-              // 1. Vision Analysis (Agent 1) - detect outfit items for context
-              const analysis = await analyzeUserPhoto(profile.userImageBase64, preferences.purpose, profile.height);
-              setProfile(prev => ({
-                  ...prev,
-                  gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
-                  estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
-                  currentStyle: analysis.currentStyle || prev.currentStyle,
-                  keptItems: analysis.keptItems || []
-              }));
-              
-              // Compute kept items: detected items MINUS items user wants to search for
-              const detectedItems = analysis.keptItems || [];
-              const searchItemsLower = searchingFor.map(s => s.toLowerCase());
-              const computedKeptItems = detectedItems.filter((item: string) => 
-                  !searchItemsLower.some(s => item.toLowerCase().includes(s) || s.includes(item.toLowerCase()))
-              );
-              setKeptItems(computedKeptItems);
-
-              // 2. Style Analysis (Agent 1.5) - vibe/color/detail context
+              // 1. Style Analysis (Agent 1.5) - analyze ONLY the kept items' style/colors
+              // Pass kept items as the target so analyzer focuses on them, not the search items
+              const keptItemsForAnalyzer = currentKeptItems.join(', ');
               const styleResult = await runStyleExampleAnalyzer(
                   { ...profile, idealStyleImages: [profile.userImageBase64!] },
-                  preferences
+                  { ...preferences, itemType: keptItemsForAnalyzer }
               );
               setStyleAnalysisResults(styleResult);
 
-              // 3. Professional Stylist Agent - generate outfit recommendations
-              const response = await generateStylistRecommendations(profile, preferences, styleResult);
+              // 2. Professional Stylist Agent - generate recs ONLY for search items
+              // kept_items are context (what user is wearing), search items are what to recommend
+              const stylistPrefs = {
+                  ...preferences,
+                  itemType: searchingFor.join(', '), // Only generate recs for these
+              };
+              const profileWithKept = {
+                  ...profile,
+                  keptItems: currentKeptItems, // What user is keeping/wearing
+              };
+              const response = await generateStylistRecommendations(profileWithKept, stylistPrefs, styleResult);
               setStylistOutfits(response.outfits);
-              setSelectedOutfitIndex(0); // Auto-select first option
+              setSelectedOutfitIndex(0);
               
-              // Build chat messages with analysis summary + stylist intro
+              // Build chat messages
               const styleName = styleResult?.suggestedStyles?.map(s => s.name).join(', ') || 'Your style';
               const mainColor = styleResult?.detectedColors?.[0] || 'Mixed';
               const otherColors = (styleResult?.detectedColors || []).slice(1);
-              const keptItemsText = computedKeptItems.length > 0 
-                  ? computedKeptItems.join(', ') 
-                  : 'your current outfit';
+              const keptItemsText = currentKeptItems.length > 0 ? currentKeptItems.join(', ') : 'your current outfit';
               const searchItemsText = searchingFor.join(', ').toLowerCase();
               
               const analysisMsg: RefinementChatMessage = {
@@ -1970,7 +1999,7 @@ export default function App() {
               </h1>
 
               {/* Single Photo Upload - compact */}
-              <div className="mb-6">
+              <div className="mb-5">
                   <div className="relative aspect-[5/4] bg-white border-2 border-dashed border-stone-300 rounded-2xl overflow-hidden">
                       {profile.userImageBase64 ? (
                           <>
@@ -1993,17 +2022,60 @@ export default function App() {
                                   type="file" 
                                   className="hidden" 
                                   accept="image/*"
-                                  onChange={async (e) => {
-                                      await handleFileUpload(e, 'userImageBase64', true);
-                                  }}
+                                  onChange={handleCard2PhotoUpload}
                               />
                           </label>
                       )}
                   </div>
               </div>
 
-              {/* Item Selection - compact pills in wrapping rows */}
-              <div className="mb-6">
+              {/* Detected Items - Kept Items Selection */}
+              {profile.userImageBase64 && (
+                  <div className="mb-5">
+                      {isAnalyzingCard2 ? (
+                          <div className="bg-stone-50 border border-stone-100 rounded-xl p-4 flex items-center gap-3">
+                              <div className="w-4 h-4 border-2 border-stone-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                              <span className="text-xs text-stone-500">Detecting items in your photo...</span>
+                          </div>
+                      ) : keptItems.length > 0 ? (
+                          <div className="bg-white border border-stone-200 rounded-xl p-4">
+                              <p className="text-sm text-stone-700 mb-3">
+                                  We detected the following items from this photo. What do you want to keep in your outfit?
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                  {(profile.keptItems || []).map((item: string, idx: number) => {
+                                      const isKept = keptItems.includes(item);
+                                      return (
+                                          <button
+                                              key={idx}
+                                              onClick={() => {
+                                                  setKeptItems(prev => 
+                                                      isKept ? prev.filter(k => k !== item) : [...prev, item]
+                                                  );
+                                              }}
+                                              className={`relative px-4 py-2 rounded-full text-xs font-medium border-2 transition-all ${
+                                                  isKept
+                                                      ? 'bg-stone-100 text-stone-900 border-stone-900'
+                                                      : 'bg-white text-stone-400 border-stone-200'
+                                              }`}
+                                          >
+                                              {item}
+                                              {isKept && (
+                                                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-stone-900 text-white rounded-full flex items-center justify-center">
+                                                      <Check size={10} />
+                                                  </span>
+                                              )}
+                                          </button>
+                                      );
+                                  })}
+                              </div>
+                          </div>
+                      ) : null}
+                  </div>
+              )}
+
+              {/* Item Selection - what to search for */}
+              <div className="mb-5">
                   <p className="text-sm text-stone-400 mb-2">What items do you want to search for?</p>
                   <div className="flex flex-wrap gap-1.5">
                       {itemTypes.map((type) => (
@@ -2287,6 +2359,521 @@ export default function App() {
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
                       <button
                           onClick={handleCard2Search}
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                      >
+                          <Search size={16} />
+                          Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
+                      </button>
+                  )}
+              </div>
+          </div>
+      );
+  };
+
+  // --- CARD 3 FLOW ---
+
+  const handleCard3GoToChat = async (occasion: string) => {
+      setPreferences(prev => ({ ...prev, occasion }));
+      setStep(AppStep.CARD3_CHAT);
+      setIsLoading(true);
+      setChatMessages([]);
+      setChatInput('');
+      setCard3Plan(null);
+
+      try {
+          const plan = await generateOccasionPlan(occasion, profile);
+          setCard3Plan(plan);
+
+          // Set selectedItemTypes from the plan
+          const itemToDisplay: Record<string, string> = {
+              'tops': 'Top', 'bottoms': 'Bottom', 'dresses': 'Dress',
+              'outerwear': 'Outerwear', 'footwear': 'Footwear',
+              'handbags': 'Handbags', 'jewelry': 'Jewelries',
+              'hair_accessories': 'Hair Accessories',
+          };
+          const detectedItems = plan.items.map(i => itemToDisplay[i] || i).filter(Boolean);
+          setSelectedItemTypes(detectedItems);
+
+          // Build chat messages
+          const analysisMsg: RefinementChatMessage = {
+              role: 'system',
+              content: JSON.stringify({ type: 'card3_plan', ...plan, occasion }),
+          };
+          const welcomeMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: `Please confirm or tell us more about your preferences/restrictions to proceed with further outfit construction.`,
+          };
+          setChatMessages([analysisMsg, welcomeMsg]);
+      } catch (err) {
+          console.error('Occasion plan error:', err);
+          const errMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: `I couldn't generate a plan. Please tell me more about what you're looking for.`,
+          };
+          setChatMessages([errMsg]);
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  const handleCard3Confirm = async () => {
+      if (!card3Plan) return;
+
+      setIsGeneratingRecs(true);
+      try {
+          // Build a synthetic StyleAnalysisResult from the plan
+          const syntheticAnalysis: StyleAnalysisResult = {
+              analysisStatus: 'success',
+              suggestedStyles: card3Plan.styles.map((s, i) => ({ id: i, name: s, description: s })),
+              detectedColors: card3Plan.colors,
+              detectedComponents: card3Plan.items,
+          };
+
+          // Build preferences with items from the plan
+          const card3Prefs = {
+              ...preferences,
+              itemType: selectedItemTypes.join(', '),
+              stylePreference: card3Plan.styles.join(', '),
+              colors: card3Plan.colors.join(', '),
+          };
+
+          const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis);
+          setStylistOutfits(response.outfits);
+          setSelectedOutfitIndex(0);
+      } catch (e) {
+          console.error("Card 3 Stylist Failed", e);
+          alert(`Something went wrong. Error: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+          setIsGeneratingRecs(false);
+      }
+  };
+
+  const handleCard3Search = async () => {
+      if (selectedOutfitIndex === null || !stylistOutfits[selectedOutfitIndex]) return;
+
+      setStep(AppStep.SEARCHING);
+      const selectedOutfit = stylistOutfits[selectedOutfitIndex];
+      const categorySearchMap: Record<string, string> = {};
+      const categorySet = new Set<string>();
+
+      selectedOutfit.recommendations.forEach(rec => {
+          const cat = resolveItemCategory(rec.category) !== 'unknown'
+              ? resolveItemCategory(rec.category)
+              : rec.category;
+          categorySearchMap[cat] = rec.serp_query;
+          categorySet.add(cat);
+      });
+
+      const enhancedPreferences = {
+          ...preferences,
+          itemType: [...categorySet].join(', '),
+      };
+
+      try {
+          const result = await searchAndRecommend(
+              profile,
+              enhancedPreferences,
+              `Selected outfit: "${selectedOutfit.name}". ${selectedOutfit.logic}`,
+              undefined,
+              categorySearchMap
+          );
+
+          const newMsg: ChatMessage = {
+              role: 'model',
+              content: result.reflectionNotes,
+              data: result
+          };
+          setMessages(prev => [...prev, newMsg]);
+          setStep(AppStep.RESULTS);
+      } catch (error) {
+          console.error("Card 3 Search Failed", error);
+          setStep(AppStep.CARD3_CHAT);
+      }
+  };
+
+  // Card 3 chat refinement handler
+  const handleCard3ChatSend = async () => {
+      const msg = chatInput.trim();
+      if (!msg || isChatLoading) return;
+
+      const userMsg: RefinementChatMessage = { role: 'user', content: msg };
+      setChatMessages(prev => [...prev, userMsg]);
+      setChatInput('');
+      setIsChatLoading(true);
+
+      try {
+          // Build criteria from current plan
+          const currentCriteria: SearchCriteria = {
+              style: card3Plan?.styles.join(', ') || null,
+              colors: card3Plan?.colors || [],
+              includedItems: card3Plan?.items || [],
+              itemCategories: card3Plan?.items || [],
+              excludedMaterials: [],
+              occasion: preferences.occasion || null,
+              priceRange: preferences.priceRange || null,
+              additionalNotes: card3Plan?.features.join(', ') || '',
+          };
+
+          const { updatedCriteria, assistantMessage } = await runChatRefinement(
+              currentCriteria,
+              chatMessages,
+              msg,
+              profile
+          );
+
+          // Update plan if criteria changed
+          if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
+              setCard3Plan(prev => {
+                  if (!prev) return prev;
+                  return {
+                      ...prev,
+                      styles: updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles,
+                      colors: updatedCriteria.colors || prev.colors,
+                      items: updatedCriteria.includedItems || prev.items,
+                  };
+              });
+          }
+
+          const assistantMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: assistantMessage,
+              criteriaSnapshot: updatedCriteria,
+          };
+          setChatMessages(prev => [...prev, assistantMsg]);
+      } catch (e) {
+          console.error('Card 3 chat error:', e);
+          const errMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: "Sorry, I couldn't process that. Please try again.",
+          };
+          setChatMessages(prev => [...prev, errMsg]);
+      } finally {
+          setIsChatLoading(false);
+      }
+  };
+
+  const renderCard3Occasion = () => {
+      const quickOccasions = ['Wedding Guest', 'Graduation Ceremony', 'Interview', 'Date Night', 'Work/Office', 'Party/Event'];
+
+      return (
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+              {/* Header */}
+              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+                  <div className="flex items-center justify-between">
+                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-stone-600" />
+                      </button>
+                      <div className="text-center">
+                          <h1 className="text-sm font-bold text-stone-900">New Outfit</h1>
+                          <p className="text-[10px] text-stone-400">Tell us about the occasion</p>
+                      </div>
+                      <div className="w-8" />
+                  </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto px-6 pt-8">
+                  <h2 className="text-2xl font-bold text-stone-900 leading-tight mb-2">What's the occasion?</h2>
+                  <p className="text-sm text-stone-400 mb-8">Tell us where you'll be wearing this outfit</p>
+
+                  {/* Text input */}
+                  <div className="mb-8">
+                      <p className="text-xs text-stone-400 mb-2">Type your answer</p>
+                      <div className="flex items-center gap-2">
+                          <input
+                              type="text"
+                              value={card3OccasionInput}
+                              onChange={(e) => setCard3OccasionInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && card3OccasionInput.trim()) {
+                                      handleCard3GoToChat(card3OccasionInput.trim());
+                                  }
+                              }}
+                              placeholder="E.g., Summer wedding, job interview, casu..."
+                              className="flex-1 px-4 py-3 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 transition-all"
+                          />
+                          <button
+                              onClick={() => card3OccasionInput.trim() && handleCard3GoToChat(card3OccasionInput.trim())}
+                              disabled={!card3OccasionInput.trim()}
+                              className={`p-3 rounded-xl transition-all ${
+                                  card3OccasionInput.trim()
+                                      ? 'bg-stone-500 text-white hover:bg-stone-600'
+                                      : 'bg-stone-100 text-stone-300'
+                              }`}
+                          >
+                              <Send size={18} />
+                          </button>
+                      </div>
+                  </div>
+
+                  {/* Quick occasion options */}
+                  <div>
+                      <p className="text-xs text-stone-400 mb-3">Or choose from common occasions:</p>
+                      <div className="grid grid-cols-2 gap-2">
+                          {quickOccasions.map(occ => (
+                              <button
+                                  key={occ}
+                                  onClick={() => handleCard3GoToChat(occ)}
+                                  className="px-4 py-3 rounded-xl border text-sm text-left transition-all border-stone-200 bg-white text-stone-700 hover:border-stone-300"
+                              >
+                                  {occ}
+                              </button>
+                          ))}
+                      </div>
+                  </div>
+              </div>
+          </div>
+      );
+  };
+
+  const renderCard3Chat = () => {
+      // Parse plan data from system message
+      let planData: any = null;
+      const sysMsg = chatMessages.find(m => m.role === 'system' && m.content.includes('card3_plan'));
+      if (sysMsg) {
+          try { planData = JSON.parse(sysMsg.content); } catch {}
+      }
+
+      return (
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+              {/* Header */}
+              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+                  <div className="flex items-center justify-between">
+                      <button onClick={() => setStep(AppStep.CARD3_OCCASION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-stone-600" />
+                      </button>
+                      <div className="text-center">
+                          <h1 className="text-sm font-bold text-stone-900">New Outfit</h1>
+                          <p className="text-[10px] text-stone-400">AI Recommendations</p>
+                      </div>
+                      <div className="w-8" />
+                  </div>
+              </div>
+
+              {/* Chat area */}
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                  {/* Loading state */}
+                  {isLoading && !planData && (
+                      <div className="flex justify-center items-center py-16">
+                          <div className="text-center">
+                              <div className="flex justify-center mb-4">
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <p className="text-sm font-medium text-stone-600">Planning your outfit...</p>
+                              <p className="text-xs text-stone-400 mt-1">Analyzing occasion and style options</p>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Plan Analysis Card */}
+                  {planData && (
+                      <div className="flex justify-start">
+                          <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                              <div className="flex items-center gap-2 mb-3">
+                                  <Sparkles size={16} className="text-stone-600" />
+                                  <span className="text-sm font-bold text-stone-900">Based on your occasion</span>
+                              </div>
+
+                              <div className="bg-stone-50 rounded-xl p-3.5 space-y-3 mb-3">
+                                  <p className="text-sm text-stone-700">
+                                      For "<strong>{planData.occasion}</strong>", we would recommend:
+                                  </p>
+                                  
+                                  {planData.items?.length > 0 && (
+                                      <div className="flex items-start gap-2">
+                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">An outfit consisting of:</span>
+                                          <div className="flex flex-wrap gap-1">
+                                              {planData.items.map((item: string, i: number) => (
+                                                  <span key={i} className="text-sm font-bold text-stone-900 capitalize">
+                                                      {item}{i < planData.items.length - 1 ? ', ' : ''}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {planData.styles?.length > 0 && (
+                                      <div className="flex items-start gap-2">
+                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Style:</span>
+                                          <div className="flex flex-wrap gap-1">
+                                              {planData.styles.map((s: string, i: number) => (
+                                                  <span key={i} className="text-sm font-bold text-stone-900">
+                                                      {s}{i < planData.styles.length - 1 ? ', ' : ''}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {planData.colors?.length > 0 && (
+                                      <div className="flex items-start gap-2">
+                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Color:</span>
+                                          <div className="flex flex-wrap gap-1">
+                                              {planData.colors.map((c: string, i: number) => (
+                                                  <span key={i} className="text-sm font-bold text-stone-900">
+                                                      {c}{i < planData.colors.length - 1 ? ', ' : ''}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {planData.features?.length > 0 && (
+                                      <div className="flex items-start gap-2">
+                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Other features:</span>
+                                          <div className="flex flex-wrap gap-1">
+                                              {planData.features.map((f: string, i: number) => (
+                                                  <span key={i} className="text-sm font-bold text-stone-900">
+                                                      {f}{i < planData.features.length - 1 ? ', ' : ''}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Chat messages (skip system) */}
+                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                              msg.role === 'user'
+                                  ? 'bg-stone-900 text-white rounded-br-md'
+                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
+                          }`}>
+                              {msg.content.split('\n').map((line, li) => (
+                                  <p key={li} className={li > 0 ? 'mt-1' : ''}>
+                                      {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
+                                          if (part.startsWith('**') && part.endsWith('**')) {
+                                              return <strong key={pi}>{part.slice(2, -2)}</strong>;
+                                          }
+                                          return <span key={pi}>{part}</span>;
+                                      })}
+                                  </p>
+                              ))}
+                          </div>
+                      </div>
+                  ))}
+
+                  {/* Outfit cards (after stylist generates) */}
+                  {stylistOutfits.length > 0 && (
+                      <div className="pt-1">
+                          <p className="text-[10px] text-stone-400 mb-2 italic">Swipe to see all options</p>
+                          <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
+                              {stylistOutfits.map((outfit, idx) => {
+                                  const isSelected = selectedOutfitIndex === idx;
+                                  const label = String.fromCharCode(65 + idx);
+
+                                  return (
+                                      <button
+                                          key={idx}
+                                          onClick={() => setSelectedOutfitIndex(idx)}
+                                          className={`snap-start shrink-0 w-[75%] text-left rounded-2xl border-2 transition-all overflow-hidden ${
+                                              isSelected ? 'border-stone-900 shadow-lg' : 'border-stone-200 shadow-sm'
+                                          }`}
+                                      >
+                                          <div className="px-4 py-3 flex items-center justify-between bg-white">
+                                              <h3 className="font-bold text-sm text-stone-900">Option {label}</h3>
+                                              {isSelected && (
+                                                  <div className="bg-stone-900 text-white p-1 rounded-full">
+                                                      <Check size={12} />
+                                                  </div>
+                                              )}
+                                          </div>
+                                          <div className="px-4 pb-4 bg-white space-y-3">
+                                              {outfit.recommendations.map((rec, rIdx) => (
+                                                  <div key={rIdx} className="border-l-2 border-stone-200 pl-3">
+                                                      <p className="text-xs font-bold text-stone-900 capitalize">{rec.category}</p>
+                                                      <p className="text-[11px] text-stone-500">Type: {rec.item_name}</p>
+                                                      {rec.color_role && (
+                                                          <p className="text-[11px] text-stone-500">Color: {rec.color_role}</p>
+                                                      )}
+                                                      {rec.style_reason && (
+                                                          <p className="text-[11px] text-stone-500">Details: {rec.style_reason}</p>
+                                                      )}
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </button>
+                                  );
+                              })}
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Generating recs indicator */}
+                  {isGeneratingRecs && (
+                      <div className="flex justify-start">
+                          <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
+                              <div className="flex items-center gap-2">
+                                  <div className="flex gap-1.5">
+                                      <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                      <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                      <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                  </div>
+                                  <span className="text-xs text-stone-500">Creating outfit options...</span>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Typing indicator for chat */}
+                  {isChatLoading && (
+                      <div className="flex justify-start">
+                          <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
+                              <div className="flex gap-1.5">
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                              </div>
+                          </div>
+                      </div>
+                  )}
+              </div>
+
+              {/* Input Area */}
+              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+                  <div className="flex items-center gap-2">
+                      <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleCard3ChatSend()}
+                          placeholder="Type your response..."
+                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          disabled={isChatLoading || isLoading}
+                      />
+                      <button
+                          onClick={handleCard3ChatSend}
+                          disabled={!chatInput.trim() || isChatLoading || isLoading}
+                          className={`p-3 rounded-xl transition-all ${
+                              chatInput.trim() && !isChatLoading && !isLoading
+                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-md'
+                                  : 'bg-stone-100 text-stone-300'
+                          }`}
+                      >
+                          <Send size={18} />
+                      </button>
+                  </div>
+
+                  {/* Action buttons */}
+                  {planData && !isGeneratingRecs && stylistOutfits.length === 0 && (
+                      <button
+                          onClick={handleCard3Confirm}
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                      >
+                          <Sparkles size={16} />
+                          Generate Outfit Options
+                      </button>
+                  )}
+
+                  {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
+                      <button
+                          onClick={handleCard3Search}
                           className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
                       >
                           <Search size={16} />
@@ -2920,6 +3507,9 @@ export default function App() {
             {/* Card 2 Flow */}
             {step === AppStep.CARD2_DETAILS && renderCard2Details()}
             {step === AppStep.CARD2_RECOMMENDATION && renderCard2Recommendations()}
+            {/* Card 3 Flow */}
+            {step === AppStep.CARD3_OCCASION && renderCard3Occasion()}
+            {step === AppStep.CARD3_CHAT && renderCard3Chat()}
             {/* Standard Flow */}
             {step === AppStep.IDEAL_STYLE && renderIdealStyle()}
             {step === AppStep.CONFIRMATION && renderConfirmation()}

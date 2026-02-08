@@ -25,6 +25,9 @@ export enum AppStep {
   PROFILE_VIEW = 'PROFILE_VIEW',
   // Chat Refinement Flow (Card 1)
   CARD1_CHAT = 'CARD1_CHAT',
+  // Card 3 Flow Steps
+  CARD3_OCCASION = 'CARD3_OCCASION',
+  CARD3_CHAT = 'CARD3_CHAT',
 }
 
 // Structured search criteria for the conversational refinement flow
@@ -51,7 +54,7 @@ export interface StylistOutfitItem {
   item_name: string;       // e.g. "Cream Silk Wide-Leg Trousers"
   serp_query: string;      // e.g. "women's cream silk wide-leg trousers high-waisted"
   style_reason: string;    // e.g. "Hard-Soft rule: fluid fabric with structured blazer"
-  color_role?: string;     // e.g. "60% dominant", "30% secondary", "10% accent"
+  color_role?: string;     // e.g. "Navy Blue", "Cream", "Navy Blue with Yellow Patterns"
 }
 
 export interface StylistOutfit {

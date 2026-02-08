@@ -8,6 +8,7 @@ import { runDirectorFinalVerdict } from "./postorchestrator_temp";
 import { runStyleExampleAnalyzer } from "./agent_style_analyzer";
 import { cacheManager } from './cacheService';
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
+import { fashionStyleLibrary } from "./fashionStyleLibrary";
 
 const API_KEY = process.env.API_KEY || '';
 
@@ -461,6 +462,78 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
 
 // --- AGENT 2B: STYLIST (Card 2 Recommendation) ---
 /**
+ * OCCASION-BASED OUTFIT PLANNER (Gemini 3 Flash)
+ * Given an occasion, generates a quick recommendation for outfit composition,
+ * style direction, color palette, and other features using fashion vocabulary.
+ */
+export const generateOccasionPlan = async (
+    occasion: string,
+    profile: UserProfile
+): Promise<{
+    items: string[];
+    styles: string[];
+    colors: string[];
+    features: string[];
+    summary: string;
+}> => {
+    // Build a compact vocabulary summary for the prompt
+    const categories = fashionVocabularyDatabase.fashion_vocabulary_database.categories;
+    const categoryNames = categories.map(c => c.name).join(', ');
+    const styleLibrarySummary = fashionStyleLibrary.fashion_style_guide.styles
+        .map(s => s.name).join(', ');
+
+    const prompt = `
+You are a fashion planning assistant. Based on the occasion below, recommend what a complete outfit should include.
+
+**Occasion:** "${occasion}"
+**User:** ${profile.gender || 'Not specified'}, Size ${profile.estimatedSize || 'Not specified'}${profile.age ? `, Age ${profile.age}` : ''}
+
+**Available Clothing Categories:** ${categoryNames}
+**Available Style Vibes:** ${styleLibrarySummary}
+
+**Your Task:**
+1. **Items**: Recommend which clothing categories to include for this occasion. Pick from the available categories. Usually 3-5 items (e.g., a top + bottom + footwear, or a dress + footwear + handbag). Use the exact category names.
+2. **Styles**: Suggest 2-4 style vibes that suit this occasion. Use the exact style names from the list above when possible.
+3. **Colors**: Suggest 3-5 color palettes appropriate for this occasion (e.g., "Pastels", "Navy Blue", "Jewel Tones", "Earth Tones", "Neutrals").
+4. **Features**: Suggest 2-4 other notable features or fabric/detail keywords (e.g., "Flowy Fabric", "Structured Silhouette", "Statement Accessories", "Minimalist Hardware").
+5. **Summary**: Write a one-sentence summary like: For "Wedding Guest", we would recommend: An outfit consisting of Dress, Heels, Clutch.
+
+**Output (Strict JSON):**
+{
+  "items": ["dress", "footwear", "handbags"],
+  "styles": ["Elegant", "Formal", "Romantic"],
+  "colors": ["Pastels", "Jewel Tones", "Neutrals"],
+  "features": ["Flowy Fabric", "Sophisticated Details", "Statement Accessories"],
+  "summary": "For a wedding guest look, a flowing dress with elegant heels and a clutch bag creates the perfect ensemble."
+}
+`;
+
+    try {
+        const response = await generateContentWithRetry(
+            'gemini-3-flash-preview',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: { responseMimeType: 'application/json' }
+            }
+        );
+
+        const text = response.text || '{}';
+        const parsed = JSON.parse(text);
+
+        return {
+            items: parsed.items || [],
+            styles: parsed.styles || [],
+            colors: parsed.colors || [],
+            features: parsed.features || [],
+            summary: parsed.summary || '',
+        };
+    } catch (error) {
+        console.error("Occasion Planner Error:", error);
+        return { items: [], styles: [], colors: [], features: [], summary: '' };
+    }
+};
+
+/**
  * PROFESSIONAL STYLIST AGENT (Gemini 3 Pro)
  * Uses master_style_guide_ai.json as source of truth.
  * Returns 3 complete outfit options with rule-based reasoning.
@@ -534,7 +607,7 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
           "item_name": "Specific item name (e.g. 'Cream Silk Wide-Leg Trousers')",
           "serp_query": "Google Shopping search query string",
           "style_reason": "Why this item, citing a specific guide rule",
-          "color_role": "60% dominant / 30% secondary / 10% accent"
+          "color_role": "Specific color name(s), e.g. 'Navy Blue', 'Cream', 'Navy Blue with Yellow Patterns'"
         }
       ]
     }
