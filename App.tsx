@@ -114,24 +114,12 @@ export default function App() {
   const [isAnalyzingCard2, setIsAnalyzingCard2] = useState(false);
   const [isGeneratingRecs, setIsGeneratingRecs] = useState(false);
 
-  useEffect(() => {
-    // Mount effect
-    console.log("App mounted");
-  }, []);
+  // Hoisted from renderCard1Profile (hooks must be at top level)
+  const [useManualSize, setUseManualSize] = useState(false);
 
-  // Update Item Type and Price Preferences
-  useEffect(() => {
-    const processedItemTypes = selectedItemTypes.map(t => {
-        if (t === 'Other') return customItemType.trim();
-        return t;
-    }).filter(t => t.length > 0 && t !== 'Other');
-
-    setPreferences(prev => ({
-      ...prev,
-      itemType: processedItemTypes.join(', '),
-      priceRange: `$${minPrice} - $${maxPrice}`
-    }));
-  }, [selectedItemTypes, customItemType, minPrice, maxPrice]);
+  // Hoisted from renderUploadPhoto (hooks must be at top level)
+  const [heightVal, setHeightVal] = useState('');
+  const [heightUnit, setHeightUnit] = useState('cm');
 
   // --- NEW: Landing Page Logic ---
   const handleSmartEntry = async () => {
@@ -195,7 +183,28 @@ export default function App() {
     }));
   }, [selectedItemTypes, customItemType, minPrice, maxPrice]);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'userImageBase64') => {
+  // Hoisted from renderUploadPhoto (hooks must be at top level)
+  useEffect(() => {
+      if (heightVal) {
+          setProfile(p => ({...p, height: `${heightVal} ${heightUnit}`}));
+      }
+  }, [heightVal, heightUnit]);
+
+  // Hoisted from renderCard1Confirm - resolve analysis promise when it changes
+  useEffect(() => {
+      if (card1AnalysisPromise) {
+          setIsLoading(true);
+          card1AnalysisPromise.then(result => {
+              setStyleAnalysisResults(result);
+              setIsLoading(false);
+          }).catch(e => {
+              console.error("Analysis failed", e);
+              setIsLoading(false);
+          });
+      }
+  }, [card1AnalysisPromise]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: 'userImageBase64', skipAutoAnalysis?: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -209,7 +218,8 @@ export default function App() {
       const base64String = reader.result as string;
       setProfile(prev => ({ ...prev, [field]: base64String }));
 
-      if (field === 'userImageBase64') {
+      // Skip auto-analysis for Card 2 (it has its own explicit analysis flow)
+      if (field === 'userImageBase64' && !skipAutoAnalysis) {
         setIsLoading(true);
         try {
           const analysis = await analyzeUserPhoto(base64String, preferences.purpose);
@@ -530,11 +540,6 @@ export default function App() {
 
   // PAGE 1B: Budget & Profile
   const renderCard1Profile = () => {
-      // Re-use renderPriceRange logic partially but inline for simplicity or reuse components?
-      // Let's implement a simplified version as per request "Just a few more questions..."
-      
-      const [useManual, setUseManual] = useState(false);
-
       return (
         <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
           <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Just a few more questions...</h1>
@@ -560,20 +565,20 @@ export default function App() {
               
               <div className="flex gap-4 mb-4">
                   <button 
-                    onClick={() => setUseManual(false)}
-                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${!useManual ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
+                    onClick={() => setUseManualSize(false)}
+                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${!useManualSize ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
                   >
                     AI Estimate
                   </button>
                   <button 
-                    onClick={() => setUseManual(true)}
-                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${useManual ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
+                    onClick={() => setUseManualSize(true)}
+                    className={`flex-1 p-3 rounded-xl border text-sm font-bold ${useManualSize ? 'bg-stone-900 text-white border-stone-900' : 'bg-white text-stone-500 border-stone-200'}`}
                   >
                     Manual Input
                   </button>
               </div>
 
-              {useManual ? (
+              {useManualSize ? (
                   <div className="space-y-4 animate-fade-in">
                       <select 
                          value={profile.gender}
@@ -623,23 +628,7 @@ export default function App() {
 
   // PAGE 1C: Confirmation
   const renderCard1Confirm = () => {
-      // Check if analysis is ready
-      useEffect(() => {
-          if (card1AnalysisPromise) {
-              setIsLoading(true);
-              card1AnalysisPromise.then(result => {
-                  setStyleAnalysisResults(result);
-                  setIsLoading(false);
-              }).catch(e => {
-                  console.error("Analysis failed", e);
-                  setIsLoading(false);
-              });
-          } else {
-             // Fallback if promise is missing (shouldn't happen if flow is followed)
-             // Maybe redirect or just stop loading?
-             setIsLoading(false);
-          }
-      }, [card1AnalysisPromise]);
+      // useEffect for resolving card1AnalysisPromise is now hoisted to App top level
 
       // Show loading state if analysis is running OR if results aren't ready yet
       if (isLoading || !styleAnalysisResults) {
@@ -804,15 +793,7 @@ export default function App() {
 
   const renderUploadPhoto = () => {
     const isHeic = profile.userImageBase64 ? (profile.userImageBase64.toLowerCase().includes('image/heic') || profile.userImageBase64.toLowerCase().includes('image/heif')) : false;
-    const [heightVal, setHeightVal] = useState('');
-    const [heightUnit, setHeightUnit] = useState('cm');
-
-    // Update profile height when inputs change
-    useEffect(() => {
-        if (heightVal) {
-            setProfile(p => ({...p, height: `${heightVal} ${heightUnit}`}));
-        }
-    }, [heightVal, heightUnit]);
+    // useState and useEffect for heightVal/heightUnit are now hoisted to App top level
 
     return (
     <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
@@ -1638,14 +1619,12 @@ export default function App() {
                       <button
                           key={type}
                           onClick={() => {
-                              const current = (preferences.itemType || '').split(', ').filter(Boolean);
-                              const updated = current.includes(type)
-                                  ? current.filter(t => t !== type)
-                                  : [...current, type];
-                              setPreferences(p => ({ ...p, itemType: updated.join(', ') }));
+                              setSelectedItemTypes(prev => 
+                                  prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+                              );
                           }}
                           className={`px-4 py-2 rounded-full text-sm border transition-all ${
-                              (preferences.itemType || '').includes(type)
+                              selectedItemTypes.includes(type)
                                   ? 'bg-stone-900 text-white border-stone-900'
                                   : 'bg-white text-stone-600 border-stone-200 hover:border-stone-400'
                           }`}
@@ -1679,9 +1658,7 @@ export default function App() {
                               className="hidden" 
                               accept="image/*"
                               onChange={async (e) => {
-                                  await handleFileUpload(e, 'userImageBase64');
-                                  // Auto-trigger analysis after upload
-                                  // We need to wait for state update, so we'll do it in useEffect or just let user click "Analyze"
+                                  await handleFileUpload(e, 'userImageBase64', true); // Skip auto-analysis; Card 2 has explicit "Analyze" button
                               }}
                           />
                       </label>
