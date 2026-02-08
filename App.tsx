@@ -393,7 +393,7 @@ export default function App() {
         }
     }
 
-    if (step === AppStep.CONFIRMATION || step === AppStep.CARD1_CONFIRM) {
+    if (step === AppStep.CONFIRMATION) {
        // Sync Confirmed Data to Preferences
        if (styleAnalysisResults) {
            const topStyle = styleAnalysisResults.suggestedStyles?.map(s => s.name).join(' OR ');
@@ -401,20 +401,10 @@ export default function App() {
 
            setPreferences(prev => ({
                ...prev,
-               // Use the confirmed style (fallback to empty if removed all)
                stylePreference: topStyle || prev.stylePreference || "", 
-               // Use confirmed colors
                colors: confirmedColors || prev.colors || "Any",
-               // Auto-fill occasion since we skipped it (optional, maybe leave blank or infer)
                occasion: prev.occasion || "General" 
            }));
-       }
-       
-       if (step === AppStep.CARD1_CONFIRM) {
-           // Initialize search criteria from style analysis before entering chat
-           initSearchCriteriaFromAnalysis();
-           setStep(AppStep.CARD1_CHAT);
-           return;
        }
 
        // Skip Occasion/Style/Color -> Jump to Dashboard
@@ -476,21 +466,33 @@ export default function App() {
     );
   };
 
-  // Initialize search criteria from style analysis results
-  const initSearchCriteriaFromAnalysis = () => {
+  // Initialize search criteria from style analysis results (accepts optional direct result)
+  const initSearchCriteriaFromAnalysisResult = (result?: StyleAnalysisResult | null) => {
+      const analysisResult = result || styleAnalysisResults;
+      
+      // Build detected components list
+      const detectedComponents = analysisResult?.detectedComponents || [];
+      const componentToDisplayName: Record<string, string> = {
+          'top': 'Top', 'bottom': 'Bottom', 'dress': 'Dress',
+          'outerwear': 'Outerwear', 'footwear': 'Shoes',
+          'handbag': 'Handbags', 'jewelry': 'Jewelries',
+          'hair_accessories': 'Hair Accessories',
+      };
+      const displayNameToCategory: Record<string, string> = {
+          'Dress': 'dresses', 'Top': 'tops', 'Bottom': 'bottoms',
+          'Shoes': 'footwear', 'Outerwear': 'outerwear', 'Handbags': 'handbags',
+          'Hair Accessories': 'hair_accessories', 'Jewelries': 'jewelry'
+      };
+      
+      // Use detected components to build item lists
+      const detectedDisplayNames = detectedComponents.map((c: string) => componentToDisplayName[c.toLowerCase()] || c);
+      const detectedItemCategories = detectedDisplayNames.map((t: string) => displayNameToCategory[t] || t.toLowerCase());
+
       const criteria: SearchCriteria = {
-          style: styleAnalysisResults?.suggestedStyles?.map(s => s.name).join(', ') || null,
-          colors: styleAnalysisResults?.detectedColors || [],
-          includedItems: selectedItemTypes.map(t => t.toLowerCase()),
-          itemCategories: selectedItemTypes.map(t => {
-              // Map display names to vocabulary categories
-              const map: Record<string, string> = {
-                  'Dress': 'dresses', 'Top': 'tops', 'Bottom': 'bottoms',
-                  'Shoes': 'footwear', 'Outerwear': 'outerwear', 'Handbags': 'handbags',
-                  'Hair Accessories': 'hair_accessories', 'Jewelries': 'jewelry'
-              };
-              return map[t] || t.toLowerCase();
-          }),
+          style: analysisResult?.suggestedStyles?.map(s => s.name).join(', ') || null,
+          colors: analysisResult?.detectedColors || [],
+          includedItems: detectedDisplayNames.map((t: string) => t.toLowerCase()),
+          itemCategories: detectedItemCategories,
           excludedMaterials: [],
           occasion: preferences.occasion || null,
           priceRange: preferences.priceRange || null,
@@ -499,13 +501,17 @@ export default function App() {
       setSearchCriteria(criteria);
       
       // Build initial system message for chat
+      const componentsText = detectedDisplayNames.length > 0 
+          ? detectedDisplayNames.join(' + ') 
+          : 'No specific items detected';
+      
       const systemMsg: RefinementChatMessage = {
           role: 'system',
-          content: `Style analysis complete. Detected: ${criteria.style || 'N/A'}. Colors: ${criteria.colors.join(', ') || 'Any'}. Items: ${criteria.includedItems.join(', ')}.`,
+          content: `Style analysis complete. Detected: ${criteria.style || 'N/A'}. Colors: ${criteria.colors.join(', ') || 'Any'}. Components: ${componentsText}.`,
       };
       const welcomeMsg: RefinementChatMessage = {
           role: 'assistant',
-          content: `I've analyzed your style photos! Here's what I found:\n\n• **Style**: ${criteria.style || 'Not detected'}\n• **Colors**: ${criteria.colors.length > 0 ? criteria.colors.join(', ') : 'Any'}\n• **Items**: ${criteria.includedItems.join(', ')}\n• **Budget**: ${criteria.priceRange || 'Not set'}\n\nFeel free to refine! Try:\n• "I want a midi skirt instead of pants"\n• "Add navy and white colors"\n• "No polyester please"\n• "This is for a date night"`,
+          content: `We detected:\n\nStyle: **${criteria.style || 'Not detected'}**\nOverall Color: **${criteria.colors.length > 0 ? criteria.colors.join(', ') : 'Any'}**\nA combination of: **${componentsText}**${criteria.priceRange ? `\nBudget: **${criteria.priceRange}**` : ''}\n\nIs that what you're looking for?`,
       };
       setChatMessages([systemMsg, welcomeMsg]);
       setChatInput('');
@@ -654,59 +660,67 @@ export default function App() {
 
   // --- Render Steps ---
 
-  // PAGE 1A: Categories & Photos
+  // PAGE 1A: Example Photos + Budget
   const renderCard1Details = () => {
-      const types = ["Dress", "Top", "Bottom", "Shoes", "Outerwear", "Handbags", "Hair Accessories", "Jewelries"];
-      
-      const onNext = () => {
-          // Trigger Analysis in Background
-          if (profile.idealStyleImages.length > 0) {
-              const promise = runStyleExampleAnalyzer(profile, preferences);
-              setCard1AnalysisPromise(promise);
-              // We don't await here, we move to next page
+      const onNext = async () => {
+          // Start analysis and go directly to chat
+          setStep(AppStep.CARD1_CHAT);
+          setIsLoading(true);
+          try {
+              // Run style analyzer (no pre-selected item types - auto-detect from photos)
+              const analysisPrefs = { ...preferences, itemType: '' }; // empty = auto-detect all components
+              const result = await runStyleExampleAnalyzer(profile, analysisPrefs);
+              setStyleAnalysisResults(result);
+
+              // Auto-populate selectedItemTypes from detected components
+              if (result?.detectedComponents && result.detectedComponents.length > 0) {
+                  const componentToDisplayName: Record<string, string> = {
+                      'top': 'Top', 'bottom': 'Bottom', 'dress': 'Dress',
+                      'outerwear': 'Outerwear', 'footwear': 'Shoes',
+                      'handbag': 'Handbags', 'jewelry': 'Jewelries',
+                      'hair_accessories': 'Hair Accessories',
+                  };
+                  const detected = result.detectedComponents
+                      .map((c: string) => componentToDisplayName[c.toLowerCase()] || c)
+                      .filter(Boolean);
+                  setSelectedItemTypes(detected);
+              }
+
+              // Initialize chat with analysis results
+              initSearchCriteriaFromAnalysisResult(result);
+          } catch (err) {
+              console.error('Style analysis error:', err);
+              // Still go to chat with empty state so user can manually input
+              initSearchCriteriaFromAnalysisResult(null);
+          } finally {
+              setIsLoading(false);
           }
-          setStep(AppStep.CARD1_PROFILE);
       };
 
       return (
-        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">What items to include?</h1>
-          <p className="text-stone-500 mb-6 text-sm">Select all that apply</p>
+        <div className="max-w-md mx-auto px-6 pt-8 animate-fade-in pb-32">
+          {/* Header */}
+          <h1 className="text-2xl font-bold font-sans text-stone-900 leading-tight mb-8">
+            Please provide us up to<br />3 example photos
+          </h1>
 
-          <div className="grid grid-cols-2 gap-3 mb-8">
-             {types.map(type => {
-               const isSelected = selectedItemTypes.includes(type);
-               return (
-                 <button
-                   key={type}
-                   onClick={() => toggleItemType(type)}
-                   className={`p-4 rounded-xl border text-sm font-bold transition-all ${isSelected ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 bg-white text-stone-900 hover:border-stone-300'}`}
-                 >
-                   {type}
-                 </button>
-               )
-             })}
-          </div>
-
-          <h2 className="text-xl font-bold font-sans text-stone-900 mb-2">Example Photos</h2>
-          <p className="text-stone-500 mb-6 text-sm">Upload up to 3 photos of the style you want</p>
-
-          <div className="grid grid-cols-3 gap-2 mb-6">
+          {/* Photo Upload - 2 column grid */}
+          <div className="grid grid-cols-2 gap-3 mb-10">
              {profile.idealStyleImages.map((img, idx) => (
-                 <div key={idx} className="relative aspect-square bg-stone-100 rounded-xl overflow-hidden border border-stone-200">
+                 <div key={idx} className="relative aspect-[3/4] bg-stone-100 rounded-2xl overflow-hidden border border-stone-200">
                      <img src={img} alt={`Example ${idx+1}`} className="w-full h-full object-cover" />
                      <button 
                         onClick={() => removeIdealImage(idx)}
-                        className="absolute top-1 right-1 bg-white/90 p-1 rounded-full shadow-sm hover:bg-white text-stone-500 hover:text-red-500"
+                        className="absolute top-2.5 right-2.5 bg-white/90 w-7 h-7 flex items-center justify-center rounded-full shadow-sm hover:bg-white text-stone-500 hover:text-red-500 transition-colors"
                      >
-                        <X size={12} />
+                        <X size={14} />
                      </button>
                  </div>
              ))}
              
              {profile.idealStyleImages.length < 3 && (
-                 <label className="aspect-square bg-stone-50 border-2 border-dashed border-stone-200 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-stone-100 transition-all text-stone-400 hover:text-stone-600">
-                     <Plus size={24} />
+                 <label className="aspect-[3/4] bg-white border-2 border-dashed border-stone-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-stone-50 hover:border-stone-400 transition-all text-stone-300 hover:text-stone-500">
+                     <Plus size={32} />
                      <input 
                         type="file" 
                         className="hidden" 
@@ -718,289 +732,183 @@ export default function App() {
              )}
           </div>
 
+          {/* Budget Section */}
+          <div className="mb-8">
+            <p className="text-sm text-stone-400 mb-2">What's your budget?</p>
+            <div className="flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
+              <span className="text-stone-400 font-medium mr-2">$</span>
+              <input 
+                type="number"
+                value={maxPrice}
+                onChange={(e) => {
+                    setMaxPrice(e.target.value);
+                    setPreferences(prev => ({ ...prev, priceRange: e.target.value ? `Under $${e.target.value}` : '' }));
+                }}
+                className="flex-1 outline-none text-stone-900 font-medium bg-transparent"
+                placeholder="500"
+              />
+            </div>
+          </div>
+
           <NavigationButtons 
             onContinue={onNext} 
             onBack={() => setStep(AppStep.GOAL_SELECTION)}
-            disabled={selectedItemTypes.length === 0 || profile.idealStyleImages.length === 0}
-            continueLabel="Analyze & Continue"
+            disabled={profile.idealStyleImages.length === 0}
+            continueLabel="Continue"
           />
         </div>
       );
   };
 
   // PAGE 1B: Budget & Profile
-  const renderCard1Profile = () => {
-      return (
-        <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Just a few more questions...</h1>
-          
-          {/* Budget */}
-          <div className="mb-8">
-              <label className="block text-sm font-bold text-stone-900 mb-2">What's your budget?</label>
-              <div className="flex items-center gap-2">
-                  <span className="text-stone-400 font-bold">$</span>
-                  <input 
-                      type="number" 
-                      value={maxPrice}
-                      onChange={(e) => setMaxPrice(e.target.value)}
-                      className="flex-1 p-4 bg-white border border-stone-200 rounded-xl font-bold outline-none focus:border-stone-900"
-                      placeholder="Max Budget"
-                  />
-              </div>
-          </div>
-
-          {/* Profile Summary (from saved profile) */}
-          <div className="mb-8">
-              <label className="block text-sm font-bold text-stone-900 mb-3">Your Profile</label>
-              {profile.isProfileSetup ? (
-                  <div className="bg-stone-50 p-4 rounded-xl border border-stone-100 space-y-3">
-                      <div className="flex items-center gap-3">
-                          {profile.profilePhotoBase64 ? (
-                              <img src={profile.profilePhotoBase64} className="w-12 h-12 rounded-full object-cover border-2 border-stone-200" />
-                          ) : (
-                              <div className="w-12 h-12 rounded-full bg-stone-200 flex items-center justify-center">
-                                  <User size={20} className="text-stone-400" />
-                              </div>
-                          )}
-                          <div className="flex-1">
-                              <p className="text-sm font-bold text-stone-900">{profile.gender} · Size {profile.estimatedSize}</p>
-                              <p className="text-xs text-stone-500">
-                                  {[profile.height, profile.heightCategory, profile.shoeSize ? `Shoe ${profile.shoeSize}` : ''].filter(Boolean).join(' · ') || 'Profile saved'}
-                              </p>
-                          </div>
-                          <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1">
-                              <CheckCircle2 size={10} /> Saved
-                          </span>
-                      </div>
-                      <button
-                          onClick={() => {
-                              setPreviousStep(step);
-                              setStep(AppStep.PROFILE_VIEW);
-                          }}
-                          className="w-full text-xs font-bold text-stone-500 hover:text-stone-900 py-1.5 bg-white rounded-lg border border-stone-200 transition-colors"
-                      >
-                          Edit Profile
-                      </button>
-                  </div>
-              ) : (
-                  <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 space-y-3">
-                      <div className="flex items-center gap-2">
-                          <AlertCircle size={16} className="text-amber-600 shrink-0" />
-                          <p className="text-xs text-amber-800">No profile set up yet. Set up your profile for better results, or enter details below.</p>
-                      </div>
-                      <button
-                          onClick={() => {
-                              setPreviousStep(step);
-                              setStep(AppStep.PROFILE_SETUP);
-                          }}
-                          className="w-full text-xs font-bold text-amber-700 hover:text-amber-900 py-2 bg-white rounded-lg border border-amber-200 transition-colors"
-                      >
-                          Set Up Profile
-                      </button>
-                      {/* Inline fallback fields */}
-                      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-amber-100">
-                          <div>
-                              <label className="text-[10px] font-medium text-stone-500 mb-0.5 block">Gender</label>
-                              <select 
-                                  value={profile.gender}
-                                  onChange={(e) => setProfile(p => ({...p, gender: e.target.value}))}
-                                  className="w-full px-2 py-2 bg-white border border-stone-200 rounded-lg text-xs outline-none"
-                              >
-                                  <option value="Female">Female</option>
-                                  <option value="Male">Male</option>
-                                  <option value="Non-binary">Non-binary</option>
-                              </select>
-                          </div>
-                          <div>
-                              <label className="text-[10px] font-medium text-stone-500 mb-0.5 block">Size</label>
-                              <select 
-                                  value={profile.estimatedSize}
-                                  onChange={(e) => setProfile(p => ({...p, estimatedSize: e.target.value}))}
-                                  className="w-full px-2 py-2 bg-white border border-stone-200 rounded-lg text-xs outline-none"
-                              >
-                                  <option value="XS">XS</option>
-                                  <option value="S">S</option>
-                                  <option value="M">M</option>
-                                  <option value="L">L</option>
-                                  <option value="XL">XL</option>
-                                  <option value="XXL">XXL</option>
-                              </select>
-                          </div>
-                      </div>
-                  </div>
-              )}
-          </div>
-
-          <NavigationButtons 
-            onContinue={() => setStep(AppStep.CARD1_CONFIRM)} 
-            onBack={() => setStep(AppStep.CARD1_DETAILS)}
-            continueLabel="Review Analysis"
-          />
-        </div>
-      );
-  };
-
-  // PAGE 1C: Confirmation
-  const renderCard1Confirm = () => {
-      // useEffect for resolving card1AnalysisPromise is now hoisted to App top level
-
-      // Show loading state if analysis is running OR if results aren't ready yet
-      if (isLoading || !styleAnalysisResults) {
-          return (
-              <div className="flex flex-col items-center justify-center h-screen">
-                  <div className="animate-spin w-12 h-12 border-4 border-stone-200 border-t-stone-900 rounded-full mb-4"></div>
-                  <p className="text-stone-500 font-bold animate-pulse">Analyzing your style...</p>
-              </div>
-          );
-      }
-
-      return renderConfirmation(); // Re-use existing confirmation page? 
-      // The user wants a specific list: Style, Color, Features.
-      // The existing renderConfirmation does exactly this (Styles, Colors).
-      // But we might want to show "Basics" too?
-      // Existing confirmation shows "Detected Aesthetics" and "Detected Palette".
-      // Let's reuse it for now, but override the "Continue" action.
-      // Actually, I need to inject the "Basics" list if possible.
-      // `renderConfirmation` reads from `styleAnalysisResults`.
-      // I'll just use `renderConfirmation` but wrap the `onContinue` in `nextStep` to handle `CARD1_CONFIRM`.
-  };
+  // NOTE: renderCard1Profile and renderCard1Confirm have been removed.
+  // Card 1 flow is now: CARD1_DETAILS (photos + budget) → CARD1_CHAT (with auto-populated analysis)
 
   // PAGE 1D: Conversational Refinement (Chat + Living Card)
   const renderCard1Chat = () => {
       // chatContainerRef and auto-scroll useEffect are hoisted to App top level
-
-      // Count of active criteria items for badge
-      const criteriaCount = [
-          searchCriteria.style,
-          searchCriteria.colors.length > 0 ? searchCriteria.colors : null,
-          searchCriteria.includedItems.length > 0 ? searchCriteria.includedItems : null,
-          searchCriteria.occasion,
-          searchCriteria.priceRange,
-          searchCriteria.excludedMaterials.length > 0 ? searchCriteria.excludedMaterials : null,
-      ].filter(Boolean).length;
 
       return (
           <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
               {/* Header */}
               <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.CARD1_CONFIRM)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                      <button onClick={() => setStep(AppStep.CARD1_DETAILS)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
                           <ChevronLeft size={20} className="text-stone-600" />
                       </button>
                       <div className="text-center">
-                          <h1 className="text-sm font-bold text-stone-900">Refine Your Search</h1>
-                          <p className="text-[10px] text-stone-400">Chat with your stylist to perfect your criteria</p>
+                          <h1 className="text-sm font-bold text-stone-900">Fashion Assistant</h1>
+                          <p className="text-[10px] text-stone-400">Let me know if you need any changes</p>
                       </div>
                       <div className="w-8" /> {/* Spacer */}
                   </div>
               </div>
 
-              {/* Living Card (Criteria Summary) */}
-              <div className="px-4 py-3 bg-gradient-to-r from-stone-50 to-amber-50/30 border-b border-stone-100">
-                  <div className="flex items-center justify-between mb-2">
-                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Search Criteria</span>
-                      <span className="text-[10px] font-bold text-stone-500 bg-white px-2 py-0.5 rounded-full border border-stone-200">
-                          {criteriaCount} active
-                      </span>
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-1.5">
-                      {/* Style */}
-                      {searchCriteria.style && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-violet-50 text-violet-700 rounded-lg text-[11px] font-medium border border-violet-100">
-                              <Sparkles size={10} /> {searchCriteria.style}
-                          </span>
-                      )}
-                      
-                      {/* Colors */}
-                      {searchCriteria.colors.map((color, i) => (
-                          <span key={`c-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-medium border border-blue-100">
-                              <Palette size={10} /> {color}
-                          </span>
-                      ))}
-                      
-                      {/* Included Items */}
-                      {searchCriteria.includedItems.map((item, i) => (
-                          <span key={`i-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-medium border border-emerald-100">
-                              <ShoppingBag size={10} /> {item}
-                          </span>
-                      ))}
-                      
-                      {/* Occasion */}
-                      {searchCriteria.occasion && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-lg text-[11px] font-medium border border-amber-100">
-                              <Calendar size={10} /> {searchCriteria.occasion}
-                          </span>
-                      )}
-                      
-                      {/* Price */}
-                      {searchCriteria.priceRange && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-stone-100 text-stone-600 rounded-lg text-[11px] font-medium border border-stone-200">
-                              <DollarSign size={10} /> {searchCriteria.priceRange}
-                          </span>
-                      )}
-                      
-                      {/* Excluded Materials */}
-                      {searchCriteria.excludedMaterials.map((mat, i) => (
-                          <span key={`x-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-600 rounded-lg text-[11px] font-medium border border-red-100">
-                              <Ban size={10} /> No {mat}
-                          </span>
-                      ))}
-
-                      {/* Additional Notes */}
-                      {searchCriteria.additionalNotes && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-stone-50 text-stone-500 rounded-lg text-[11px] font-medium border border-stone-200">
-                              <StickyNote size={10} /> {searchCriteria.additionalNotes.slice(0, 30)}{searchCriteria.additionalNotes.length > 30 ? '...' : ''}
-                          </span>
-                      )}
-
-                      {criteriaCount === 0 && (
-                          <span className="text-[11px] text-stone-400 italic">No criteria set yet. Start chatting!</span>
-                      )}
-                  </div>
-              </div>
+              {/* Criteria summary is now embedded in the first chat message card */}
 
               {/* Chat Messages */}
               <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
-                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                              msg.role === 'user' 
-                                  ? 'bg-stone-900 text-white rounded-br-md' 
-                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
-                          }`}>
-                              {/* Render message with basic formatting */}
-                              {msg.content.split('\n').map((line, li) => (
-                                  <p key={li} className={li > 0 ? 'mt-1' : ''}>
-                                      {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
-                                          if (part.startsWith('**') && part.endsWith('**')) {
-                                              return <strong key={pi}>{part.slice(2, -2)}</strong>;
-                                          }
-                                          return <span key={pi}>{part}</span>;
-                                      })}
-                                  </p>
-                              ))}
-                              
-                              {/* Show what changed if criteria updated */}
-                              {msg.criteriaSnapshot && Object.keys(msg.criteriaSnapshot).length > 0 && (
-                                  <div className="mt-2 pt-2 border-t border-stone-200/50">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Updated:</p>
-                                      <div className="flex flex-wrap gap-1">
-                                          {Object.entries(msg.criteriaSnapshot).map(([key, val]) => {
-                                              if (!val || (Array.isArray(val) && val.length === 0)) return null;
-                                              const displayVal = Array.isArray(val) ? val.join(', ') : String(val);
-                                              return (
-                                                  <span key={key} className="text-[10px] px-1.5 py-0.5 bg-white/60 rounded text-stone-500 border border-stone-200/50">
-                                                      {key}: {displayVal}
-                                                  </span>
-                                              );
-                                          })}
-                                      </div>
-                                  </div>
-                              )}
+                  {/* Loading state while analysis runs */}
+                  {isLoading && chatMessages.length === 0 && (
+                      <div className="flex justify-center items-center py-16">
+                          <div className="text-center">
+                              <div className="flex justify-center mb-4">
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <p className="text-sm font-medium text-stone-600">Analyzing your style photos...</p>
+                              <p className="text-xs text-stone-400 mt-1">This usually takes 10-15 seconds</p>
                           </div>
                       </div>
-                  ))}
+                  )}
+
+                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => {
+                      // Special card rendering for the first assistant message (detection summary)
+                      const isFirstAssistant = idx === 0 && msg.role === 'assistant' && msg.content.includes('We detected');
+                      
+                      if (isFirstAssistant) {
+                          return (
+                              <div key={idx} className="flex justify-start">
+                                  <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                      <div className="flex items-center gap-2 mb-3">
+                                          <Sparkles size={16} className="text-stone-600" />
+                                          <span className="text-sm font-bold text-stone-900">We detected</span>
+                                      </div>
+                                      
+                                      {searchCriteria.style && (
+                                          <div className="mb-2">
+                                              <span className="text-xs text-stone-400">Style: </span>
+                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.style}</span>
+                                          </div>
+                                      )}
+                                      
+                                      {searchCriteria.colors.length > 0 && (
+                                          <div className="mb-2">
+                                              <span className="text-xs text-stone-400">Overall Color: </span>
+                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.colors.join(', ')}</span>
+                                          </div>
+                                      )}
+                                      
+                                      {searchCriteria.includedItems.length > 0 && (
+                                          <div className="mb-3">
+                                              <p className="text-xs text-stone-400 mb-1.5">A combination of:</p>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                  {searchCriteria.includedItems.map((item, i) => (
+                                                      <span key={i} className="px-3 py-1 bg-stone-100 text-stone-700 rounded-full text-xs font-medium capitalize">
+                                                          {item}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+                                      
+                                      {searchCriteria.priceRange && (
+                                          <div className="mb-3">
+                                              <span className="text-xs text-stone-400">Budget: </span>
+                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.priceRange}</span>
+                                          </div>
+                                      )}
+                                      
+                                      <p className="text-sm text-stone-600 mt-2">Is that what you're looking for?</p>
+                                  </div>
+                              </div>
+                          );
+                      }
+
+                      return (
+                          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                                  msg.role === 'user' 
+                                      ? 'bg-stone-900 text-white rounded-br-md' 
+                                      : 'bg-stone-100 text-stone-800 rounded-bl-md'
+                              }`}>
+                                  {/* Render message with basic formatting */}
+                                  {msg.content.split('\n').map((line, li) => (
+                                      <p key={li} className={li > 0 ? 'mt-1' : ''}>
+                                          {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
+                                              if (part.startsWith('**') && part.endsWith('**')) {
+                                                  return <strong key={pi}>{part.slice(2, -2)}</strong>;
+                                              }
+                                              return <span key={pi}>{part}</span>;
+                                          })}
+                                      </p>
+                                  ))}
+                                  
+                                  {/* Show what changed if criteria updated */}
+                                  {msg.criteriaSnapshot && Object.keys(msg.criteriaSnapshot).length > 0 && (
+                                      <div className="mt-2 pt-2 border-t border-stone-200/50">
+                                          {/* Show current items as pills if includedItems were updated */}
+                                          {(msg.criteriaSnapshot as any).includedItems && (
+                                              <div className="mb-1.5">
+                                                  <p className="text-[10px] text-stone-400 mb-1">Current items:</p>
+                                                  <div className="flex flex-wrap gap-1">
+                                                      {searchCriteria.includedItems.map((item, i) => (
+                                                          <span key={i} className="px-2 py-0.5 bg-stone-200/60 text-stone-600 rounded-full text-[10px] font-medium capitalize">
+                                                              {item}
+                                                          </span>
+                                                      ))}
+                                                  </div>
+                                              </div>
+                                          )}
+                                          {/* Show other updated fields */}
+                                          <div className="flex flex-wrap gap-1">
+                                              {Object.entries(msg.criteriaSnapshot).filter(([key]) => key !== 'includedItems' && key !== 'itemCategories').map(([key, val]) => {
+                                                  if (!val || (Array.isArray(val) && val.length === 0)) return null;
+                                                  const displayVal = Array.isArray(val) ? val.join(', ') : String(val);
+                                                  return (
+                                                      <span key={key} className="text-[10px] px-1.5 py-0.5 bg-white/60 rounded text-stone-500 border border-stone-200/50">
+                                                          {key}: {displayVal}
+                                                      </span>
+                                                  );
+                                              })}
+                                          </div>
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      );
+                  })}
                   
                   {/* Typing indicator */}
                   {isChatLoading && (
@@ -1039,7 +947,7 @@ export default function App() {
                           value={chatInput}
                           onChange={(e) => setChatInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleChatSend()}
-                          placeholder="Refine your style... (e.g. 'add a midi skirt')"
+                          placeholder="Type your response..."
                           className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
                           disabled={isChatLoading}
                       />
@@ -1119,7 +1027,7 @@ export default function App() {
           <button
              onClick={() => {
                  setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING}));
-                 setStep(AppStep.ITEM_TYPE);
+                 setStep(AppStep.CARD2_DETAILS);
              }}
              className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
           >
@@ -1913,14 +1821,8 @@ export default function App() {
 
           <NavigationButtons 
             onContinue={nextStep} 
-            onBack={() => {
-                if (step === AppStep.CARD1_CONFIRM) {
-                    setStep(AppStep.CARD1_PROFILE);
-                } else {
-                    setStep(AppStep.IDEAL_STYLE);
-                }
-            }}
-            continueLabel={step === AppStep.CARD1_CONFIRM ? "Find My Style" : "Confirm & Continue"}
+            onBack={() => setStep(AppStep.IDEAL_STYLE)}
+            continueLabel="Confirm & Continue"
           />
         </div>
     );
@@ -1928,64 +1830,8 @@ export default function App() {
 
   // --- CARD 2 LOGIC ---
 
-  const handleCard2Analysis = async () => {
-      if (!profile.userImageBase64) return;
-      
-      setIsAnalyzingCard2(true);
-      try {
-          // 1. Vision Analysis (Agent 1) - detect outfit items
-          const analysis = await analyzeUserPhoto(profile.userImageBase64, preferences.purpose, profile.height);
-          
-          // Only update outfit-related fields (keptItems, currentStyle).
-          // Preserve gender/size from the saved user profile if it exists.
-          setProfile(prev => ({
-              ...prev,
-              gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
-              estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
-              currentStyle: analysis.currentStyle || prev.currentStyle,
-              keptItems: analysis.keptItems || []
-          }));
-          
-          setKeptItems(analysis.keptItems || []);
-
-          // 2. Style Analysis (Agent 1.5) - on the same photo
-          // We treat the user photo as an "ideal style" example for vibe analysis
-          const styleResult = await runStyleExampleAnalyzer(
-              { ...profile, idealStyleImages: [profile.userImageBase64] }, 
-              preferences
-          );
-          
-          setCard1AnalysisPromise(Promise.resolve(styleResult)); // Reuse this state or create new one? 
-          // Let's reuse card1AnalysisPromise as a generic "style analysis" holder or create a specific one.
-          // Actually, we need the result for the next step immediately.
-          
-      } catch (e) {
-          console.error("Card 2 Analysis Failed", e);
-      } finally {
-          setIsAnalyzingCard2(false);
-      }
-  };
-
-  const handleGenerateStylistRecs = async () => {
-      setIsGeneratingRecs(true);
-      try {
-          // Run style analyzer on the outfit photo for vibe/color/detail context
-          const styleResult = await runStyleExampleAnalyzer(
-              { ...profile, idealStyleImages: [profile.userImageBase64!] }, 
-              preferences
-          );
-
-          // Call the Professional Stylist Agent
-          const response = await generateStylistRecommendations(profile, preferences, styleResult);
-          setStylistOutfits(response.outfits);
-          setSelectedOutfitIndex(null); // Reset selection
-          setStep(AppStep.CARD2_RECOMMENDATION);
-      } catch (e) {
-          console.error("Stylist Recs Failed", e);
-      } finally {
-          setIsGeneratingRecs(false);
-      }
-  };
+  // NOTE: handleCard2Analysis and handleGenerateStylistRecs have been consolidated
+  // into onCard2Continue inside renderCard2Details for a streamlined Card 2 flow.
 
   const handleCard2Search = async () => {
       if (selectedOutfitIndex === null || !stylistOutfits[selectedOutfitIndex]) return;
@@ -2033,262 +1879,420 @@ export default function App() {
       }
   };
 
-  const renderCard2Details = () => (
-      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-          <ProgressBar currentStep={step} />
-          <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">What are we matching?</h1>
-          <p className="text-stone-500 mb-6">Upload your current outfit and tell us what you need to complete the look.</p>
+  const renderCard2Details = () => {
+      const itemTypes = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Footwear', 'Handbags', 'Hair Accessories', 'Jewelries'];
 
-          {/* 1. Target Categories */}
-          <div className="mb-6">
-              <label className="block text-sm font-medium text-stone-700 mb-2">I am looking for:</label>
-              <div className="flex flex-wrap gap-2">
-                  {['Top', 'Bottom', 'Shoes', 'Outerwear', 'Accessories'].map((type) => (
-                      <button
-                          key={type}
-                          onClick={() => {
-                              setSelectedItemTypes(prev => 
-                                  prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
-                              );
-                          }}
-                          className={`px-4 py-2 rounded-full text-sm border transition-all ${
-                              selectedItemTypes.includes(type)
-                                  ? 'bg-stone-900 text-white border-stone-900'
-                                  : 'bg-white text-stone-600 border-stone-200 hover:border-stone-400'
-                          }`}
-                      >
-                          {type}
-                      </button>
-                  ))}
-              </div>
-          </div>
+      const onCard2Continue = async () => {
+          if (!profile.userImageBase64) return;
+          
+          // Remember what user wants to search for
+          const searchingFor = [...selectedItemTypes];
+          
+          // Run analysis + stylist recs, then go to recommendations page
+          setStep(AppStep.CARD2_RECOMMENDATION);
+          setIsGeneratingRecs(true);
+          
+          // Initialize chat with loading state
+          setChatMessages([]);
+          setChatInput('');
+          
+          try {
+              // 1. Vision Analysis (Agent 1) - detect outfit items for context
+              const analysis = await analyzeUserPhoto(profile.userImageBase64, preferences.purpose, profile.height);
+              setProfile(prev => ({
+                  ...prev,
+                  gender: prev.isProfileSetup ? prev.gender : (analysis.gender || prev.gender),
+                  estimatedSize: prev.isProfileSetup ? prev.estimatedSize : (analysis.estimatedSize || prev.estimatedSize),
+                  currentStyle: analysis.currentStyle || prev.currentStyle,
+                  keptItems: analysis.keptItems || []
+              }));
+              
+              // Compute kept items: detected items MINUS items user wants to search for
+              const detectedItems = analysis.keptItems || [];
+              const searchItemsLower = searchingFor.map(s => s.toLowerCase());
+              const computedKeptItems = detectedItems.filter((item: string) => 
+                  !searchItemsLower.some(s => item.toLowerCase().includes(s) || s.includes(item.toLowerCase()))
+              );
+              setKeptItems(computedKeptItems);
 
-          {/* 2. Upload Photo */}
-          <div className="mb-6">
-              <label className="block text-sm font-medium text-stone-700 mb-2">My Current Outfit:</label>
-              <div className="relative aspect-[3/4] bg-stone-50 border-2 border-dashed border-stone-200 rounded-xl overflow-hidden hover:bg-stone-100 transition-all group">
-                  {profile.userImageBase64 ? (
-                      <>
-                          <img src={profile.userImageBase64} alt="Current Outfit" className="w-full h-full object-cover" />
-                          <button 
-                              onClick={() => setProfile(p => ({...p, userImageBase64: null, keptItems: []}))}
-                              className="absolute top-2 right-2 bg-white/90 p-2 rounded-full shadow-sm text-stone-500 hover:text-red-500"
-                          >
-                              <X size={16} />
-                          </button>
-                      </>
-                  ) : (
-                      <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer">
-                          <Camera size={32} className="text-stone-400 mb-2 group-hover:scale-110 transition-transform" />
-                          <span className="text-sm text-stone-500">Tap to upload photo</span>
-                          <input 
-                              type="file" 
-                              className="hidden" 
-                              accept="image/*"
-                              onChange={async (e) => {
-                                  await handleFileUpload(e, 'userImageBase64', true); // Skip auto-analysis; Card 2 has explicit "Analyze" button
-                              }}
-                          />
-                      </label>
-                  )}
-              </div>
-          </div>
+              // 2. Style Analysis (Agent 1.5) - vibe/color/detail context
+              const styleResult = await runStyleExampleAnalyzer(
+                  { ...profile, idealStyleImages: [profile.userImageBase64!] },
+                  preferences
+              );
+              setStyleAnalysisResults(styleResult);
 
-          {/* 3. Analysis & Confirmation Section */}
-          {profile.userImageBase64 && (
-             <div className="bg-stone-50 p-4 rounded-xl border border-stone-100 animate-fade-in">
-                 {!isAnalyzingCard2 && keptItems.length === 0 && (
-                     <button 
-                        onClick={handleCard2Analysis}
-                        className="w-full py-3 bg-stone-900 text-white rounded-lg font-medium text-sm flex items-center justify-center gap-2"
-                     >
-                        <Sparkles size={16} />
-                        Analyze Outfit
-                     </button>
-                 )}
+              // 3. Professional Stylist Agent - generate outfit recommendations
+              const response = await generateStylistRecommendations(profile, preferences, styleResult);
+              setStylistOutfits(response.outfits);
+              setSelectedOutfitIndex(0); // Auto-select first option
+              
+              // Build chat messages with analysis summary + stylist intro
+              const styleName = styleResult?.suggestedStyles?.map(s => s.name).join(', ') || 'Your style';
+              const mainColor = styleResult?.detectedColors?.[0] || 'Mixed';
+              const otherColors = (styleResult?.detectedColors || []).slice(1);
+              const keptItemsText = computedKeptItems.length > 0 
+                  ? computedKeptItems.join(', ') 
+                  : 'your current outfit';
+              const searchItemsText = searchingFor.join(', ').toLowerCase();
+              
+              const analysisMsg: RefinementChatMessage = {
+                  role: 'system',
+                  content: JSON.stringify({
+                      type: 'stylist_analysis',
+                      style: styleName,
+                      mainColor: mainColor,
+                      otherColors: otherColors,
+                      searchItems: searchItemsText,
+                      keptItems: keptItemsText,
+                  }),
+              };
+              const introMsg: RefinementChatMessage = {
+                  role: 'assistant',
+                  content: `Based on your current outfit, here are some styling ideas:\n\nPick one option you like, or let me know if you'd like to adjust anything!`,
+              };
+              setChatMessages([analysisMsg, introMsg]);
 
-                 {isAnalyzingCard2 && (
-                     <div className="flex flex-col items-center py-4">
-                         <div className="w-6 h-6 border-2 border-stone-900 border-t-transparent rounded-full animate-spin mb-2" />
-                         <span className="text-xs text-stone-500">Scanning items & style...</span>
-                     </div>
-                 )}
-
-                 {keptItems.length > 0 && (
-                     <div className="space-y-4">
-                         <div>
-                             <h4 className="text-sm font-bold text-stone-900 mb-2">I am wearing (Keep selected):</h4>
-                             <div className="flex flex-wrap gap-2">
-                                 {keptItems.map((item, idx) => (
-                                     <button
-                                         key={idx}
-                                         onClick={() => {
-                                             // Toggle keep status (for now just UI, strictly we should update profile.keptItems)
-                                             const newKept = keptItems.includes(item) 
-                                                ? keptItems.filter(i => i !== item)
-                                                : [...keptItems, item]; // This logic is weird if we are iterating keptItems.
-                                             // Better:
-                                             // If it's in the list, we show it as selected.
-                                             // If user clicks, we remove it? Or just toggle visual state?
-                                             // Let's assume all in keptItems are "detected". User confirms which to "keep".
-                                             // We need a separate state for "confirmedKeptItems" or just filter the main list.
-                                             // For simplicity: Click to remove.
-                                             setKeptItems(prev => prev.filter((_, i) => i !== idx));
-                                             setProfile(p => ({...p, keptItems: p.keptItems?.filter((_, i) => i !== idx)}));
-                                         }}
-                                         className="px-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs font-medium text-stone-700 flex items-center gap-2 hover:border-red-200 hover:bg-red-50 group"
-                                     >
-                                         {item}
-                                         <X size={12} className="text-stone-400 group-hover:text-red-500" />
-                                     </button>
-                                 ))}
-                             </div>
-                         </div>
-                         
-                         {/* Profile summary from saved profile */}
-                         <div className="bg-stone-100 p-3 rounded-lg">
-                             <p className="text-xs text-stone-500 mb-1">Using your saved profile:</p>
-                             <p className="text-xs font-bold text-stone-900">
-                                 {profile.gender} · Size {profile.estimatedSize}
-                                 {profile.height ? ` · ${profile.height}` : ''}
-                                 {profile.shoeSize ? ` · Shoe ${profile.shoeSize}` : ''}
-                             </p>
-                         </div>
-                     </div>
-                 )}
-             </div>
-          )}
-
-          <NavigationButtons 
-              onContinue={handleGenerateStylistRecs}
-              disabled={!profile.userImageBase64 || keptItems.length === 0 || !preferences.itemType}
-              continueLabel={isGeneratingRecs ? "Designing..." : "Get Recommendations"}
-              onBack={() => setStep(AppStep.GOAL_SELECTION)}
-          />
-      </div>
-  );
-
-  const renderCard2Recommendations = () => {
-      // Color role badge colors
-      const colorRoleBadge = (role?: string) => {
-          if (!role) return null;
-          const lower = role.toLowerCase();
-          if (lower.includes('60%')) return 'bg-stone-100 text-stone-700 border-stone-200';
-          if (lower.includes('30%')) return 'bg-blue-50 text-blue-700 border-blue-100';
-          if (lower.includes('10%')) return 'bg-amber-50 text-amber-700 border-amber-100';
-          return 'bg-stone-50 text-stone-500 border-stone-200';
+          } catch (e) {
+              console.error("Card 2 Pipeline Failed", e);
+              alert(`Something went wrong during analysis. Error: ${e instanceof Error ? e.message : String(e)}`);
+              setStep(AppStep.CARD2_DETAILS);
+          } finally {
+              setIsGeneratingRecs(false);
+          }
       };
 
       return (
-          <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
-              <button onClick={() => setStep(AppStep.CARD2_DETAILS)} className="mb-3 p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
-                  <ChevronLeft size={20} className="text-stone-600" />
-              </button>
+          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+              {/* Header */}
+              <h1 className="text-2xl font-bold font-sans text-stone-900 leading-tight mb-5">
+                  Please provide us a photo<br />of your current outfit
+              </h1>
 
-              <h1 className="text-2xl font-bold font-sans text-stone-900 mb-1">Your Stylist Picks</h1>
-              <p className="text-stone-500 mb-6 text-sm">3 outfit options designed using professional styling rules. Tap to select one.</p>
-
-              {stylistOutfits.length === 0 && (
-                  <div className="text-center py-12">
-                      <p className="text-stone-400 text-sm">No outfits generated. Go back and try again.</p>
+              {/* Single Photo Upload - compact */}
+              <div className="mb-6">
+                  <div className="relative aspect-[5/4] bg-white border-2 border-dashed border-stone-300 rounded-2xl overflow-hidden">
+                      {profile.userImageBase64 ? (
+                          <>
+                              <img src={profile.userImageBase64} alt="Current Outfit" className="w-full h-full object-cover" />
+                              <button 
+                                  onClick={() => {
+                                      setProfile(p => ({...p, userImageBase64: null, keptItems: []}));
+                                      setKeptItems([]);
+                                  }}
+                                  className="absolute top-2.5 right-2.5 bg-white/90 w-7 h-7 flex items-center justify-center rounded-full shadow-sm hover:bg-white text-stone-500 hover:text-red-500 transition-colors"
+                              >
+                                  <X size={14} />
+                              </button>
+                          </>
+                      ) : (
+                          <label className="flex flex-col items-center justify-center w-full h-full cursor-pointer hover:bg-stone-50 transition-colors">
+                              <Plus size={32} className="text-stone-300 mb-2" />
+                              <span className="text-sm text-stone-400">Upload photo</span>
+                              <input 
+                                  type="file" 
+                                  className="hidden" 
+                                  accept="image/*"
+                                  onChange={async (e) => {
+                                      await handleFileUpload(e, 'userImageBase64', true);
+                                  }}
+                              />
+                          </label>
+                      )}
                   </div>
-              )}
-
-              <div className="space-y-4 mb-6">
-                  {stylistOutfits.map((outfit, idx) => {
-                      const isSelected = selectedOutfitIndex === idx;
-                      
-                      return (
-                          <button
-                              key={idx}
-                              onClick={() => setSelectedOutfitIndex(idx)}
-                              className={`w-full text-left p-0 rounded-2xl border-2 transition-all overflow-hidden ${
-                                  isSelected 
-                                      ? 'border-stone-900 shadow-lg shadow-stone-200 ring-1 ring-stone-900' 
-                                      : 'border-stone-200 hover:border-stone-400 shadow-sm'
-                              }`}
-                          >
-                              {/* Outfit Header */}
-                              <div className={`px-5 py-4 ${isSelected ? 'bg-stone-900 text-white' : 'bg-stone-50'}`}>
-                                  <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-3">
-                                          <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                                              isSelected ? 'bg-white text-stone-900' : 'bg-stone-200 text-stone-600'
-                                          }`}>
-                                              {idx + 1}
-                                          </span>
-                                          <h3 className={`font-bold text-sm ${isSelected ? 'text-white' : 'text-stone-900'}`}>
-                                              {outfit.name}
-                                          </h3>
-                                      </div>
-                                      {isSelected && (
-                                          <div className="bg-white text-stone-900 p-1 rounded-full">
-                                              <Check size={14} />
-                                          </div>
-                                      )}
-                                  </div>
-                              </div>
-
-                              {/* Outfit Items */}
-                              <div className="px-5 py-3 space-y-2.5 bg-white">
-                                  {outfit.recommendations.map((rec, rIdx) => (
-                                      <div key={rIdx} className="flex items-start gap-3 py-1.5">
-                                          <div className="w-7 h-7 rounded-lg bg-stone-100 flex items-center justify-center shrink-0 mt-0.5">
-                                              <Tag size={12} className="text-stone-500" />
-                                          </div>
-                                          <div className="flex-1 min-w-0">
-                                              <div className="flex items-center gap-2 flex-wrap">
-                                                  <span className="text-xs font-bold text-stone-400 uppercase tracking-wide">{rec.category}</span>
-                                                  {rec.color_role && (
-                                                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${colorRoleBadge(rec.color_role)}`}>
-                                                          {rec.color_role}
-                                                      </span>
-                                                  )}
-                                              </div>
-                                              <p className="text-sm font-semibold text-stone-900 truncate mt-0.5">{rec.item_name}</p>
-                                              <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-2">{rec.style_reason}</p>
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-
-                              {/* Styling Logic (expanded when selected) */}
-                              {isSelected && (
-                                  <div className="px-5 py-3 bg-stone-50 border-t border-stone-100 animate-fade-in">
-                                      <h4 className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                                          <Sparkles size={10} /> Styling Logic
-                                      </h4>
-                                      <p className="text-xs text-stone-600 leading-relaxed">{outfit.logic}</p>
-                                      {outfit.body_type_notes && (
-                                          <p className="text-xs text-stone-500 mt-2 italic border-t border-stone-100 pt-2">
-                                              {outfit.body_type_notes}
-                                          </p>
-                                      )}
-                                  </div>
-                              )}
-                          </button>
-                      );
-                  })}
               </div>
 
-              {/* Search button */}
-              <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-10">
-                  <div className="max-w-md mx-auto px-4">
+              {/* Item Selection - compact pills in wrapping rows */}
+              <div className="mb-6">
+                  <p className="text-sm text-stone-400 mb-2">What items do you want to search for?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                      {itemTypes.map((type) => (
+                          <button
+                              key={type}
+                              onClick={() => {
+                                  setSelectedItemTypes(prev => 
+                                      prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
+                                  );
+                              }}
+                              className={`px-3 py-1.5 rounded-full text-xs border transition-all ${
+                                  selectedItemTypes.includes(type)
+                                      ? 'bg-stone-900 text-white border-stone-900'
+                                      : 'bg-white text-stone-500 border-stone-200 hover:border-stone-400'
+                              }`}
+                          >
+                              {type}
+                          </button>
+                      ))}
+                  </div>
+              </div>
+
+              {/* Budget */}
+              <div className="mb-6">
+                  <p className="text-sm text-stone-400 mb-2">What's your budget?</p>
+                  <div className="flex items-center border border-stone-200 rounded-xl px-4 py-3 bg-white">
+                      <span className="text-stone-400 font-medium mr-2">$</span>
+                      <input 
+                          type="number"
+                          value={maxPrice}
+                          onChange={(e) => {
+                              setMaxPrice(e.target.value);
+                              setPreferences(prev => ({ ...prev, priceRange: e.target.value ? `Under $${e.target.value}` : '' }));
+                          }}
+                          className="flex-1 outline-none text-stone-900 font-medium bg-transparent"
+                          placeholder="0"
+                      />
+                  </div>
+              </div>
+
+              <NavigationButtons 
+                  onContinue={onCard2Continue}
+                  disabled={!profile.userImageBase64 || selectedItemTypes.length === 0}
+                  continueLabel="Continue"
+                  onBack={() => setStep(AppStep.GOAL_SELECTION)}
+              />
+          </div>
+      );
+  };
+
+  // Card 2 chat refinement handler
+  const handleCard2ChatSend = async () => {
+      const msg = chatInput.trim();
+      if (!msg || isChatLoading) return;
+
+      const userMsg: RefinementChatMessage = { role: 'user', content: msg };
+      setChatMessages(prev => [...prev, userMsg]);
+      setChatInput('');
+      setIsChatLoading(true);
+
+      try {
+          // Use the chat refinement agent to adjust the selected outfit
+          const { updatedCriteria, assistantMessage } = await runChatRefinement(
+              searchCriteria,
+              chatMessages,
+              msg,
+              profile
+          );
+
+          // Merge updated criteria
+          if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
+              setSearchCriteria(prev => ({
+                  ...prev,
+                  ...updatedCriteria,
+                  colors: updatedCriteria.colors || prev.colors,
+                  includedItems: updatedCriteria.includedItems || prev.includedItems,
+                  itemCategories: updatedCriteria.itemCategories || prev.itemCategories,
+                  excludedMaterials: updatedCriteria.excludedMaterials || prev.excludedMaterials,
+              }));
+          }
+
+          const assistantMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: assistantMessage,
+              criteriaSnapshot: updatedCriteria,
+          };
+          setChatMessages(prev => [...prev, assistantMsg]);
+      } catch (e) {
+          console.error('Card 2 chat error:', e);
+          const errMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: "Sorry, I couldn't process that. Please try again.",
+          };
+          setChatMessages(prev => [...prev, errMsg]);
+      } finally {
+          setIsChatLoading(false);
+      }
+  };
+
+  const renderCard2Recommendations = () => {
+      // Parse the analysis data from the system message
+      let analysisData: any = null;
+      const sysMsg = chatMessages.find(m => m.role === 'system' && m.content.includes('stylist_analysis'));
+      if (sysMsg) {
+          try { analysisData = JSON.parse(sysMsg.content); } catch {}
+      }
+
+      return (
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+              {/* Header */}
+              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+                  <div className="flex items-center justify-between">
+                      <button onClick={() => setStep(AppStep.CARD2_DETAILS)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-stone-600" />
+                      </button>
+                      <div className="text-center">
+                          <h1 className="text-sm font-bold text-stone-900">Fashion Stylist</h1>
+                          <p className="text-[10px] text-stone-400">Review styling recommendations</p>
+                      </div>
+                      <div className="w-8" />
+                  </div>
+              </div>
+
+              {/* Chat + Cards area */}
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                  {/* Loading state */}
+                  {isGeneratingRecs && stylistOutfits.length === 0 && (
+                      <div className="flex justify-center items-center py-16">
+                          <div className="text-center">
+                              <div className="flex justify-center mb-4">
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <p className="text-sm font-medium text-stone-600">Analyzing your outfit...</p>
+                              <p className="text-xs text-stone-400 mt-1">This may take 15-30 seconds</p>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Stylist Analysis Card (first message) */}
+                  {analysisData && (
+                      <div className="flex justify-start">
+                          <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                              <div className="flex items-center gap-2 mb-3">
+                                  <Sparkles size={16} className="text-stone-600" />
+                                  <span className="text-sm font-bold text-stone-900">Stylist Analysis</span>
+                              </div>
+                              
+                              <div className="bg-stone-50 rounded-xl p-3.5 space-y-2 mb-3">
+                                  <p className="text-sm text-stone-700">
+                                      Your current outfit style is <strong>{analysisData.style}</strong>.
+                                  </p>
+                                  <p className="text-sm text-stone-700">
+                                      Major color is <strong>{analysisData.mainColor}</strong>
+                                      {analysisData.otherColors?.length > 0 && (
+                                          <>, with other colors <strong>{analysisData.otherColors.join(', ')}</strong></>
+                                      )}.
+                                  </p>
+                                  <p className="text-sm text-stone-700">
+                                      We are going to search for <strong>{analysisData.searchItems}</strong> to match your current <strong>{analysisData.keptItems}</strong>.
+                                  </p>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Chat messages (skip system messages) */}
+                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                              msg.role === 'user' 
+                                  ? 'bg-stone-900 text-white rounded-br-md' 
+                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
+                          }`}>
+                              {msg.content.split('\n').map((line, li) => (
+                                  <p key={li} className={li > 0 ? 'mt-1' : ''}>
+                                      {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
+                                          if (part.startsWith('**') && part.endsWith('**')) {
+                                              return <strong key={pi}>{part.slice(2, -2)}</strong>;
+                                          }
+                                          return <span key={pi}>{part}</span>;
+                                      })}
+                                  </p>
+                              ))}
+                          </div>
+                      </div>
+                  ))}
+
+                  {/* Horizontally scrollable outfit cards */}
+                  {stylistOutfits.length > 0 && (
+                      <div className="pt-1">
+                          <p className="text-[10px] text-stone-400 mb-2 italic">Swipe to see all options</p>
+                          <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
+                              {stylistOutfits.map((outfit, idx) => {
+                                  const isSelected = selectedOutfitIndex === idx;
+                                  const label = String.fromCharCode(65 + idx); // A, B, C...
+                                  
+                                  return (
+                                      <button
+                                          key={idx}
+                                          onClick={() => setSelectedOutfitIndex(idx)}
+                                          className={`snap-start shrink-0 w-[75%] text-left rounded-2xl border-2 transition-all overflow-hidden ${
+                                              isSelected 
+                                                  ? 'border-stone-900 shadow-lg' 
+                                                  : 'border-stone-200 shadow-sm'
+                                          }`}
+                                      >
+                                          {/* Card Header */}
+                                          <div className="px-4 py-3 flex items-center justify-between bg-white">
+                                              <h3 className="font-bold text-sm text-stone-900">Option {label}</h3>
+                                              {isSelected && (
+                                                  <div className="bg-stone-900 text-white p-1 rounded-full">
+                                                      <Check size={12} />
+                                                  </div>
+                                              )}
+                                          </div>
+                                          
+                                          {/* Card Items */}
+                                          <div className="px-4 pb-4 bg-white space-y-3">
+                                              {outfit.recommendations.map((rec, rIdx) => (
+                                                  <div key={rIdx} className="border-l-2 border-stone-200 pl-3">
+                                                      <p className="text-xs font-bold text-stone-900 capitalize">{rec.category}</p>
+                                                      <p className="text-[11px] text-stone-500">Type: {rec.item_name}</p>
+                                                      {rec.color_role && (
+                                                          <p className="text-[11px] text-stone-500">Color: {rec.color_role}</p>
+                                                      )}
+                                                      {rec.style_reason && (
+                                                          <p className="text-[11px] text-stone-500">Details: {rec.style_reason}</p>
+                                                      )}
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </button>
+                                  );
+                              })}
+                          </div>
+                      </div>
+                  )}
+
+                  {/* Typing indicator */}
+                  {isChatLoading && (
+                      <div className="flex justify-start">
+                          <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
+                              <div className="flex gap-1.5">
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                              </div>
+                          </div>
+                      </div>
+                  )}
+              </div>
+
+              {/* Input Area */}
+              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+                  <div className="flex items-center gap-2">
+                      <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleCard2ChatSend()}
+                          placeholder="Type your response..."
+                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          disabled={isChatLoading || isGeneratingRecs}
+                      />
                       <button
-                          onClick={handleCard2Search}
-                          disabled={selectedOutfitIndex === null}
-                          className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
-                              selectedOutfitIndex !== null
-                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200'
-                                  : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                          onClick={handleCard2ChatSend}
+                          disabled={!chatInput.trim() || isChatLoading || isGeneratingRecs}
+                          className={`p-3 rounded-xl transition-all ${
+                              chatInput.trim() && !isChatLoading && !isGeneratingRecs
+                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-md' 
+                                  : 'bg-stone-100 text-stone-300'
                           }`}
                       >
-                          <Search size={16} />
-                          {selectedOutfitIndex !== null 
-                              ? `Find Items for "${stylistOutfits[selectedOutfitIndex]?.name}"` 
-                              : 'Select an outfit above'}
+                          <Send size={18} />
                       </button>
                   </div>
+
+                  {/* Search button */}
+                  {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
+                      <button
+                          onClick={handleCard2Search}
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                      >
+                          <Search size={16} />
+                          Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
+                      </button>
+                  )}
               </div>
           </div>
       );
@@ -2911,8 +2915,7 @@ export default function App() {
             {step === AppStep.PROFILE_MANUAL && renderProfileManual()}
             {/* Card 1 Flow */}
             {step === AppStep.CARD1_DETAILS && renderCard1Details()}
-            {step === AppStep.CARD1_PROFILE && renderCard1Profile()}
-            {step === AppStep.CARD1_CONFIRM && renderCard1Confirm()}
+            {/* CARD1_PROFILE and CARD1_CONFIRM removed - Card 1 goes directly from CARD1_DETAILS to CARD1_CHAT */}
             {step === AppStep.CARD1_CHAT && renderCard1Chat()}
             {/* Card 2 Flow */}
             {step === AppStep.CARD2_DETAILS && renderCard2Details()}

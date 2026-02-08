@@ -21,8 +21,11 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
  * Reduces context usage and distraction.
  */
 const getContextualVocabulary = (requestedItemTypes: string) => {
-    const requested = requestedItemTypes.toLowerCase().split(',').map(s => s.trim());
+    const requested = requestedItemTypes.toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
     const vocabularyContext: any = {};
+    
+    // If no specific items requested, include ALL categories (auto-detect mode)
+    const includeAll = requested.length === 0;
     
     // Map of user terms to database keys (simple fuzzy matching)
     const termMapping: Record<string, string> = {
@@ -37,8 +40,8 @@ const getContextualVocabulary = (requestedItemTypes: string) => {
     };
 
     fashionVocabularyDatabase.fashion_vocabulary_database.categories.forEach(cat => {
-        // Check if this category is requested
-        const isRequested = requested.some(req => 
+        // Check if this category is requested (or include all for auto-detect)
+        const isRequested = includeAll || requested.some(req => 
             cat.name.includes(req) || 
             (termMapping[req] && cat.name === termMapping[req])
         );
@@ -102,6 +105,8 @@ export const runStyleExampleAnalyzer = async (
       return { inlineData: { mimeType, data } };
     });
 
+    const hasRequestedItems = preferences.itemType && preferences.itemType.trim().length > 0;
+
     const prompt = `
     AGENT: Style & Detail Analyzer
     
@@ -109,14 +114,14 @@ export const runStyleExampleAnalyzer = async (
     **Task:** Analyze the user's uploaded "Ideal Style" images to extract structured data for a personal stylist app.
     
     **Input Context:**
-    - User Request (Target Items): ${preferences.itemType}
+    ${hasRequestedItems ? `- User Request (Target Items): ${preferences.itemType}` : '- User Request: Not specified (auto-detect from images)'}
     - Example Images: [Attached Images]
     
     **Reference Libraries:**
     1. **Fashion Style Library (Vibes):** Use this to identify the *overall aesthetic*.
     ${styleLibraryJson}
     
-    2. **Fashion Vocabulary (Details):** Use this to identify *specific structural details* for the requested items.
+    2. **Fashion Vocabulary (Details):** Use this to identify *specific structural details*.
     ${vocabularyJson}
 
     **Your Instructions:**
@@ -128,12 +133,18 @@ export const runStyleExampleAnalyzer = async (
     - Return the ID, Name, and a short reason for each match.
 
     **STEP 2: Color Detection**
-    - Extract the *dominant* colors of the *requested items* in the photos.
-    - Ignore background colors or colors of non-requested items.
+    - Extract the *dominant* colors of the clothing items in the photos.
+    - Ignore background colors.
     - Return a simple list of color names (e.g., "Navy Blue", "Cream", "Burgundy").
 
-    **STEP 3: Structural Detail Extraction**
-    - For each requested category (e.g., "dresses", "footwear"), scan the images for matching terms in the 'Fashion Vocabulary'.
+    **STEP 3: Component Detection**
+    - Identify ALL clothing categories/components visible in the images.
+    - Use these category names ONLY: "top", "bottom", "dress", "outerwear", "footwear", "handbag", "jewelry", "hair_accessories"
+    - For example, if the photo shows a blouse, jeans, heels, and a clutch, return: ["top", "bottom", "footwear", "handbag"]
+    - Look across ALL uploaded images and combine the results.
+
+    **STEP 4: Structural Detail Extraction**
+    - For each detected component category, scan the images for matching terms in the 'Fashion Vocabulary'.
     - Extract specific attributes like: necklines, sleeves, materials, patterns, heel_types, etc.
     - **CRITICAL:** Only use terms that exist in the provided Vocabulary JSON.
 
@@ -150,6 +161,7 @@ export const runStyleExampleAnalyzer = async (
         }
       ],
       "detected_colors": ["String", "String"],
+      "detected_components": ["top", "bottom", "footwear"],
       "detail_dataset": {
         "category_name (e.g. tops)": {
            "necklines": ["String"],
@@ -202,6 +214,7 @@ export const runStyleExampleAnalyzer = async (
         // NEW FIELDS FOR CONFIRMATION FLOW
         suggestedStyles: parsed.suggested_styles,
         detectedColors: parsed.detected_colors,
+        detectedComponents: parsed.detected_components || [],
         detailDataset: parsed.detail_dataset,
 
         // Legacy/Fallback mapping for backward compatibility (Agent 2/3 might still look for this)
