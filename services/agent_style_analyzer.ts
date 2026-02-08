@@ -29,7 +29,7 @@ const getContextualVocabulary = (requestedItemTypes: string) => {
         'top': 'tops', 'shirt': 'tops', 'blouse': 'tops',
         'bottom': 'bottoms', 'pant': 'bottoms', 'jeans': 'bottoms', 'skirt': 'bottoms',
         'dress': 'dresses', 'gown': 'dresses',
-        'shoe': 'shoes', 'boot': 'shoes', 'heel': 'shoes',
+        'shoe': 'footwear', 'boot': 'footwear', 'heel': 'footwear', 'sneaker': 'footwear',
         'coat': 'outerwear', 'jacket': 'outerwear', 'blazer': 'outerwear',
         'bag': 'handbags', 'purse': 'handbags',
         'jewelry': 'jewelry', 'necklace': 'jewelry', 'ring': 'jewelry',
@@ -44,7 +44,11 @@ const getContextualVocabulary = (requestedItemTypes: string) => {
         );
 
         if (isRequested) {
-            vocabularyContext[cat.name] = cat.subcategories;
+            // v3.0 uses basics + details; fallback to subcategories for older versions
+            vocabularyContext[cat.name] = (cat as any).basics || (cat as any).subcategories || {};
+            if ((cat as any).details) {
+                vocabularyContext[cat.name + '_details'] = (cat as any).details;
+            }
         }
     });
 
@@ -129,7 +133,7 @@ export const runStyleExampleAnalyzer = async (
     - Return a simple list of color names (e.g., "Navy Blue", "Cream", "Burgundy").
 
     **STEP 3: Structural Detail Extraction**
-    - For each requested category (e.g., "dresses", "shoes"), scan the images for matching terms in the 'Fashion Vocabulary'.
+    - For each requested category (e.g., "dresses", "footwear"), scan the images for matching terms in the 'Fashion Vocabulary'.
     - Extract specific attributes like: necklines, sleeves, materials, patterns, heel_types, etc.
     - **CRITICAL:** Only use terms that exist in the provided Vocabulary JSON.
 

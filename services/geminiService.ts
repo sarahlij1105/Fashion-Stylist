@@ -1,11 +1,13 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { UserProfile, Preferences, RecommendationItem, StylistResponse, OutfitComponent, FashionPurpose, StyleAnalysisResult } from "../types";
+import { UserProfile, Preferences, RecommendationItem, StylistResponse, OutfitComponent, FashionPurpose, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, ProfessionalStylistResponse } from "../types";
+import { masterStyleGuide } from "./masterStyleGuide";
 import { runCategoryMicroAgent } from "./agent2_procurement_temp";
 import { runVerificationStep, runStylistScoringStep, runOutfitComposerStep } from "./agent3_curator_temp";
 import { runDirectorFinalVerdict } from "./postorchestrator_temp";
 import { runStyleExampleAnalyzer } from "./agent_style_analyzer";
 import { cacheManager } from './cacheService';
+import { fashionVocabularyDatabase } from "./fashionVocabulary";
 
 const API_KEY = process.env.API_KEY || '';
 
@@ -134,6 +136,196 @@ export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<User
     } catch (error) {
         console.error("Profile Analyzer Error:", error);
         return {};
+    }
+};
+
+// --- CONVERSATIONAL REFINEMENT AGENT (Gemini 3 Flash) ---
+// Vocabulary-aware chat agent that updates structured SearchCriteria
+
+// Build a lookup map from the fashion vocabulary for item recognition
+const buildVocabularyMap = (): Record<string, string> => {
+    const map: Record<string, string> = {};
+    const db = fashionVocabularyDatabase.fashion_vocabulary_database;
+    
+    // Recursively extract all string values from a nested object/array
+    const extractAllStrings = (obj: any): string[] => {
+        const terms: string[] = [];
+        if (Array.isArray(obj)) {
+            obj.forEach(v => {
+                if (typeof v === 'string') terms.push(v);
+                else if (typeof v === 'object' && v !== null) {
+                    if (v.name) terms.push(v.name);
+                    terms.push(...extractAllStrings(v));
+                }
+            });
+        } else if (typeof obj === 'object' && obj !== null) {
+            Object.values(obj).forEach(val => {
+                terms.push(...extractAllStrings(val));
+            });
+        }
+        return terms;
+    };
+
+    db.categories.forEach((cat: any) => {
+        const catName = cat.name; // e.g. "tops", "bottoms", "dresses", "footwear"
+        
+        // v3.0 structure: cat.basics + cat.details (replaces cat.subcategories)
+        if (cat.basics) {
+            const basicsTerms = extractAllStrings(cat.basics);
+            basicsTerms.forEach(term => { map[term.toLowerCase()] = catName; });
+        }
+        if (cat.details) {
+            const detailsTerms = extractAllStrings(cat.details);
+            detailsTerms.forEach(term => { map[term.toLowerCase()] = catName; });
+        }
+        // Fallback for older v1.0 structure (cat.subcategories)
+        if (cat.subcategories) {
+            const subTerms = extractAllStrings(cat.subcategories);
+            subTerms.forEach(term => { map[term.toLowerCase()] = catName; });
+        }
+        
+        // Also map the category name itself
+        map[catName] = catName;
+    });
+
+    // Common aliases (handles both "shoes" and "footwear" naming)
+    map['skirt'] = 'bottoms';
+    map['pants'] = 'bottoms';
+    map['jeans'] = 'bottoms';
+    map['shorts'] = 'bottoms';
+    map['shirt'] = 'tops';
+    map['blouse'] = 'tops';
+    map['top'] = 'tops';
+    map['dress'] = 'dresses';
+    map['gown'] = 'dresses';
+    map['jacket'] = 'outerwear';
+    map['coat'] = 'outerwear';
+    map['blazer'] = 'outerwear';
+    map['sneakers'] = 'footwear';
+    map['heels'] = 'footwear';
+    map['boots'] = 'footwear';
+    map['sandals'] = 'footwear';
+    map['shoes'] = 'footwear';
+    map['flats'] = 'footwear';
+    map['loafers'] = 'footwear';
+    map['mules'] = 'footwear';
+    map['bag'] = 'handbags';
+    map['purse'] = 'handbags';
+    map['clutch'] = 'handbags';
+    map['backpack'] = 'handbags';
+    map['necklace'] = 'jewelry';
+    map['earrings'] = 'jewelry';
+    map['bracelet'] = 'jewelry';
+    map['ring'] = 'jewelry';
+    map['hat'] = 'hair_accessories';
+    map['headband'] = 'hair_accessories';
+    map['scrunchie'] = 'hair_accessories';
+    
+    return map;
+};
+
+const vocabularyMap = buildVocabularyMap();
+
+// Resolve a user's item term to its parent category
+export const resolveItemCategory = (term: string): string => {
+    const lower = term.toLowerCase().trim();
+    return vocabularyMap[lower] || 'unknown';
+};
+
+export const runChatRefinement = async (
+    currentCriteria: SearchCriteria,
+    chatHistory: RefinementChatMessage[],
+    userMessage: string,
+    profile: UserProfile
+): Promise<{ updatedCriteria: Partial<SearchCriteria>; assistantMessage: string }> => {
+    try {
+        // Build a compact vocabulary summary for the prompt
+        const categoryNames = fashionVocabularyDatabase.fashion_vocabulary_database.categories.map((c: any) => c.name);
+        
+        const prompt = `
+You are a friendly fashion assistant helping a user refine their search criteria for a shopping app.
+
+**CURRENT SEARCH CRITERIA:**
+${JSON.stringify(currentCriteria, null, 2)}
+
+**USER PROFILE:**
+- Gender: ${profile.gender}
+- Size: ${profile.estimatedSize}
+${profile.height ? `- Height: ${profile.height}` : ''}
+
+**FASHION VOCABULARY CATEGORIES:** ${categoryNames.join(', ')}
+Common item-to-category mappings:
+- "skirt", "pants", "jeans", "shorts" → bottoms
+- "shirt", "blouse", "camisole", "top" → tops  
+- "dress", "gown" → dresses
+- "jacket", "coat", "blazer" → outerwear
+- "sneakers", "heels", "boots", "sandals" → footwear
+- "bag", "purse", "clutch", "backpack" → handbags
+
+**CONVERSATION HISTORY:**
+${chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}
+
+**USER'S NEW MESSAGE:** "${userMessage}"
+
+**YOUR TASK:**
+1. Understand what the user wants to change or add.
+2. Return ONLY the fields that changed (not the whole criteria).
+3. **CRITICAL for includedItems:** Use the user's SPECIFIC words. If they say "skirt", put "skirt" not "bottoms". If they say "silk camisole", put "silk camisole". These are search terms.
+4. **CRITICAL for itemCategories:** Map each includedItem to its parent category for pipeline routing. "skirt" → "bottoms", "camisole" → "tops".
+5. For excludedMaterials: If user says "no polyester" or "I don't like nylon", add those.
+6. Be conversational and brief in your response.
+
+**OUTPUT (Strict JSON):**
+\`\`\`json
+{
+  "updatedCriteria": {
+    // ONLY include fields that changed. Omit unchanged fields.
+    // "includedItems": ["skirt", "silk top"],  ← user's specific words
+    // "itemCategories": ["bottoms", "tops"],    ← resolved categories
+    // "style": "Minimalist",
+    // "colors": ["White", "Navy"],
+    // "excludedMaterials": ["polyester"],
+    // "occasion": "Date night",
+    // "priceRange": "$50-$200",
+    // "additionalNotes": "prefers flowy fabrics"
+  },
+  "assistantMessage": "Got it! Added a skirt and silk top to your search. Anything else?"
+}
+\`\`\`
+`;
+
+        const response = await generateContentWithRetry(
+            'gemini-3-flash-preview',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: { responseMimeType: 'application/json' }
+            }
+        );
+
+        const text = response.text || '{}';
+        const parsed = JSON.parse(text);
+
+        // Post-process: ensure itemCategories are resolved from vocabulary
+        if (parsed.updatedCriteria?.includedItems) {
+            const resolvedCategories = parsed.updatedCriteria.includedItems.map((item: string) => {
+                const cat = resolveItemCategory(item);
+                return cat !== 'unknown' ? cat : item; // Fallback to the item itself
+            });
+            // Deduplicate categories
+            parsed.updatedCriteria.itemCategories = [...new Set(resolvedCategories)];
+        }
+
+        return {
+            updatedCriteria: parsed.updatedCriteria || {},
+            assistantMessage: parsed.assistantMessage || "I've updated your search criteria."
+        };
+
+    } catch (e) {
+        console.error("Chat Refinement Agent Error:", e);
+        return {
+            updatedCriteria: {},
+            assistantMessage: "Sorry, I had trouble understanding that. Could you rephrase?"
+        };
     }
 };
 
@@ -268,49 +460,88 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
 };
 
 // --- AGENT 2B: STYLIST (Card 2 Recommendation) ---
+/**
+ * PROFESSIONAL STYLIST AGENT (Gemini 3 Pro)
+ * Uses master_style_guide_ai.json as source of truth.
+ * Returns 3 complete outfit options with rule-based reasoning.
+ */
 export const generateStylistRecommendations = async (
     profile: UserProfile,
     preferences: Preferences,
     styleAnalysis: StyleAnalysisResult
-): Promise<{ userMessage: string; searchQueries: Record<string, string> }> => {
+): Promise<ProfessionalStylistResponse> => {
     try {
         const keptItems = profile.keptItems?.join(', ') || "No specific items identified";
         const targetItems = preferences.itemType;
-        const styleVibe = styleAnalysis.suggestedStyles?.map(s => s.name).join(' OR ') || "General Style";
-        const detectedColors = styleAnalysis.detectedColors?.join(', ') || "No specific colors";
-        
-        // Extract structural details for kept items if available
-        const keptItemDetails = styleAnalysis.detailDataset ? JSON.stringify(styleAnalysis.detailDataset) : "No structural details";
+        const styleVibe = styleAnalysis.suggestedStyles?.map(s => s.name).join(', ') || "Not specified";
+        const detectedColors = styleAnalysis.detectedColors?.join(', ') || "Not detected";
+        const keptItemDetails = styleAnalysis.detailDataset ? JSON.stringify(styleAnalysis.detailDataset) : "No structural details available";
+
+        // Inject the full style guide as system context
+        const styleGuideJson = JSON.stringify(masterStyleGuide.master_style_guide, null, 2);
 
         const prompt = `
-        **AGENT: Personal Stylist**
-        **Goal:** Recommend specific items to complete the user's outfit and generate precise search queries for them.
+**ROLE:** You are an elite Professional Stylist. You MUST follow the "Master Style Guide" below as your absolute source of truth.
 
-        **User Context:**
-        - **Current Outfit (Kept Items):** ${keptItems}
-        - **Kept Item Details:** ${keptItemDetails}
-        - **Target Items (To Buy):** ${targetItems}
-        - **User Vibe:** ${styleVibe}
-        - **Palette:** ${detectedColors}
-        - **User Stats:** Gender: ${profile.gender}, Size: ${profile.estimatedSize}
+**MASTER STYLE GUIDE (Source of Truth):**
+${styleGuideJson}
 
-        **Instructions:**
-        1. Analyze the "Kept Items" and their style/color.
-        2. Suggest **3 distinct options** for EACH target item category that would perfectly match the kept items.
-        3. For each option, specify: Color, Type, Features, Why.
-        4. **CRITICAL:** Generate a "Search Query" for EACH target category. This query will be used by a procurement bot to find the items. It should be a string of keywords including color, material, item name, and key details (e.g. "White Silk Camisole V-neck").
+**USER CONTEXT:**
+- Gender: ${profile.gender}
+- Size: ${profile.estimatedSize}
+${profile.height ? `- Height: ${profile.height}` : ''}
+${profile.heightCategory ? `- Build: ${profile.heightCategory}` : ''}
+${profile.age ? `- Age: ${profile.age}` : ''}
+- Current Outfit (Kept Items): ${keptItems}
+- Kept Item Structural Details: ${keptItemDetails}
+- Looking For: ${targetItems}
+- Style Vibe: ${styleVibe}
+- Detected Palette: ${detectedColors}
+- Occasion: ${preferences.occasion || 'General / Not specified'}
+- Budget: ${preferences.priceRange || 'Not specified'}
+${preferences.colors ? `- Preferred Colors: ${preferences.colors}` : ''}
 
-        **Output Format (JSON):**
-        \`\`\`json
+**YOUR TASK: Execute the 7-Step Recommendation Workflow**
+
+Follow these steps IN ORDER for each of the 3 outfits you create:
+
+1. **IDENTIFY & BASE:** Map the occasion to the guide's occasion rules. Establish a color palette using the 60-30-10 Rule (dominant neutral, secondary complement, accent pop). If the user has kept items, those items define part of your base — build around them.
+
+2. **PROPORTION & TEXTURE:** Apply Proportion Balance (fitted vs. loose — NEVER balance equally). Apply Hard-Soft Contrast (pair a structured fabric with a fluid one).
+
+3. **LAYERING & COMPLETION:** Add a "third piece" for polish (jacket, cardigan, vest, scarf). Ensure the outfit meets the Five-Piece Rule (top + bottom/dress + footwear + layer + accessory).
+
+4. **FINAL VALIDATION:** Verify the One-Statement Rule (only 1 bold element). Check that no absolute rules are violated.
+
+**CRITICAL OUTPUT RULES:**
+- Create exactly **3 distinct outfit options** that the user can choose from.
+- Each outfit should have a different personality (e.g., one classic, one trendy, one bold).
+- For each item in the outfit, generate a **serp_query** — this is a Google Shopping search string. It must include: gender + color + material + item type + key feature. Example: "women's cream silk wide-leg trousers high-waisted".
+- Each item's **style_reason** must cite a SPECIFIC rule from the guide (e.g., "60-30-10 Rule: charcoal is your 60% base", "Hard-Soft Rule: silk against your denim jacket").
+- The **logic** field must walk through the 7-step workflow and explain the reasoning.
+- If the user has kept items, those items should NOT appear in your recommendations (they already own them). Only recommend NEW items to buy.
+
+**OUTPUT FORMAT (Strict JSON):**
+{
+  "outfits": [
+    {
+      "name": "Creative outfit name (e.g. 'The Weekend Editor')",
+      "logic": "Step-by-step reasoning (1-2 sentences per step, citing specific guide rules)",
+      "body_type_notes": "How silhouette was adjusted for user's build (if applicable)",
+      "recommendations": [
         {
-          "userMessage": "Markdown string containing the friendly recommendations list (e.g. ### Top Recommendations...)",
-          "searchQueries": {
-            "CategoryName (e.g. Top)": "keywords for search",
-            "CategoryName (e.g. Shoes)": "keywords for search"
-          }
+          "category": "top/bottom/footwear/outerwear/accessories/jewelry/handbag",
+          "item_name": "Specific item name (e.g. 'Cream Silk Wide-Leg Trousers')",
+          "serp_query": "Google Shopping search query string",
+          "style_reason": "Why this item, citing a specific guide rule",
+          "color_role": "60% dominant / 30% secondary / 10% accent"
         }
-        \`\`\`
-        `;
+      ]
+    }
+  ],
+  "refined_constraints": "Any additional notes for the procurement pipeline"
+}
+`;
 
         const response = await generateContentWithRetry(
             'gemini-3-pro-preview',
@@ -321,15 +552,27 @@ export const generateStylistRecommendations = async (
         );
 
         const text = response.text || "{}";
-        // Clean markdown code blocks
-        const cleanText = text.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
-        return JSON.parse(cleanText);
+        const parsed = JSON.parse(text);
+
+        // Validate structure
+        if (!parsed.outfits || !Array.isArray(parsed.outfits)) {
+            console.error("Stylist Agent: Invalid output structure", parsed);
+            return {
+                outfits: [],
+                refined_constraints: "Agent returned invalid structure"
+            };
+        }
+
+        return {
+            outfits: parsed.outfits,
+            refined_constraints: parsed.refined_constraints || ""
+        };
 
     } catch (e) {
-        console.error("Stylist Agent Failed:", e);
-        return { 
-            userMessage: "I couldn't generate recommendations at this time.", 
-            searchQueries: {} 
+        console.error("Professional Stylist Agent Failed:", e);
+        return {
+            outfits: [],
+            refined_constraints: "Agent error: " + (e instanceof Error ? e.message : String(e))
         };
     }
 };
@@ -525,7 +768,8 @@ export const searchAndRecommend = async (
 export const searchAndRecommendCard1 = async (
   profile: UserProfile,
   preferences: Preferences,
-  providedStyleAnalysis?: StyleAnalysisResult
+  providedStyleAnalysis?: StyleAnalysisResult,
+  categorySpecificStyles?: Record<string, string>
 ): Promise<StylistResponse> => {
   const startTimeTotal = performance.now();
   const timings: string[] = [];
@@ -543,11 +787,18 @@ export const searchAndRecommendCard1 = async (
     const pipelinePromises = categories.map(async (category) => {
         const catStart = performance.now();
         
+        // Determine specific style/search preference for this category
+        let loopPreferences = preferences;
+        if (categorySpecificStyles && categorySpecificStyles[category]) {
+            console.log(`>> Applying Category-Specific Search for [${category}]: ${categorySpecificStyles[category]}`);
+            loopPreferences = { ...preferences, stylePreference: categorySpecificStyles[category] };
+        }
+        
         // 1. Procurement (Micro-Agent)
         const t0 = performance.now();
         // Path instruction is simple for Card 1
         const pathInstruction = `Find ${category} matching the analyzed style.`;
-        const procurementResult = await runCategoryMicroAgent(category, profile, preferences, pathInstruction, today, styleAnalysis);
+        const procurementResult = await runCategoryMicroAgent(category, profile, loopPreferences, pathInstruction, today, styleAnalysis);
         const t1 = performance.now();
         const procDuration = (t1 - t0).toFixed(0);
         

@@ -23,6 +23,47 @@ export enum AppStep {
   // Profile Flow
   PROFILE_SETUP = 'PROFILE_SETUP',
   PROFILE_VIEW = 'PROFILE_VIEW',
+  // Chat Refinement Flow (Card 1)
+  CARD1_CHAT = 'CARD1_CHAT',
+}
+
+// Structured search criteria for the conversational refinement flow
+export interface SearchCriteria {
+  style: string | null;         // e.g. "Minimalist", "Boho"
+  colors: string[];             // e.g. ["White", "Navy"]
+  includedItems: string[];      // SPECIFIC items e.g. ["skirt", "silk camisole"] - used as search terms
+  itemCategories: string[];     // BROAD categories e.g. ["bottoms", "tops"] - for pipeline routing
+  excludedMaterials: string[];  // e.g. ["polyester", "nylon"]
+  occasion: string | null;      // e.g. "Date night", "Office"
+  priceRange: string | null;    // e.g. "$50-$200"
+  additionalNotes: string;      // Free-form notes from the conversation
+}
+
+export interface RefinementChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  criteriaSnapshot?: Partial<SearchCriteria>; // What changed in this turn
+}
+
+// Professional Stylist Agent output types
+export interface StylistOutfitItem {
+  category: string;        // e.g. "bottom", "top", "footwear"
+  item_name: string;       // e.g. "Cream Silk Wide-Leg Trousers"
+  serp_query: string;      // e.g. "women's cream silk wide-leg trousers high-waisted"
+  style_reason: string;    // e.g. "Hard-Soft rule: fluid fabric with structured blazer"
+  color_role?: string;     // e.g. "60% dominant", "30% secondary", "10% accent"
+}
+
+export interface StylistOutfit {
+  name: string;            // e.g. "The NYFW Minimalist"
+  logic: string;           // Detailed reasoning citing specific style guide rules
+  body_type_notes?: string; // How silhouette was balanced
+  recommendations: StylistOutfitItem[];
+}
+
+export interface ProfessionalStylistResponse {
+  outfits: StylistOutfit[];
+  refined_constraints?: string;
 }
 
 export enum FashionPurpose {

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations } from './services/geminiService';
+import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, runChatRefinement, resolveItemCategory } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save } from 'lucide-react';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote } from 'lucide-react';
 // import ReactMarkdown from 'react-markdown';
 
 const DefaultProfile: UserProfile = {
@@ -111,7 +111,8 @@ export default function App() {
   
   // Card 2 State
   const [keptItems, setKeptItems] = useState<string[]>([]);
-  const [stylistRecommendation, setStylistRecommendation] = useState<string>("");
+  const [stylistOutfits, setStylistOutfits] = useState<StylistOutfit[]>([]);
+  const [selectedOutfitIndex, setSelectedOutfitIndex] = useState<number | null>(null);
   const [stylistSearchQueries, setStylistSearchQueries] = useState<Record<string, string>>({});
   const [isAnalyzingCard2, setIsAnalyzingCard2] = useState(false);
   const [isGeneratingRecs, setIsGeneratingRecs] = useState(false);
@@ -120,6 +121,25 @@ export default function App() {
   const [isAnalyzingProfile, setIsAnalyzingProfile] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [previousStep, setPreviousStep] = useState<AppStep>(AppStep.GOAL_SELECTION);
+
+  // --- CHAT REFINEMENT STATE (Card 1) ---
+  const defaultSearchCriteria: SearchCriteria = {
+    style: null,
+    colors: [],
+    includedItems: [],
+    itemCategories: [],
+    excludedMaterials: [],
+    occasion: null,
+    priceRange: null,
+    additionalNotes: '',
+  };
+  const [searchCriteria, setSearchCriteria] = useState<SearchCriteria>(defaultSearchCriteria);
+  const [chatMessages, setChatMessages] = useState<RefinementChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+
+  // Hoisted ref for chat container auto-scroll
+  const chatContainerRef = React.useRef<HTMLDivElement>(null);
 
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
@@ -196,6 +216,13 @@ export default function App() {
           setProfile(p => ({...p, height: `${heightVal} ${heightUnit}`}));
       }
   }, [heightVal, heightUnit]);
+
+  // Hoisted from renderCard1Chat - auto-scroll chat on new messages
+  useEffect(() => {
+      if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      }
+  }, [chatMessages]);
 
   // Hoisted from renderCard1Confirm - resolve analysis promise when it changes
   useEffect(() => {
@@ -384,7 +411,9 @@ export default function App() {
        }
        
        if (step === AppStep.CARD1_CONFIRM) {
-           handleCard1Search();
+           // Initialize search criteria from style analysis before entering chat
+           initSearchCriteriaFromAnalysis();
+           setStep(AppStep.CARD1_CHAT);
            return;
        }
 
@@ -445,6 +474,159 @@ export default function App() {
     setSelectedItemTypes(prev => 
       prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
     );
+  };
+
+  // Initialize search criteria from style analysis results
+  const initSearchCriteriaFromAnalysis = () => {
+      const criteria: SearchCriteria = {
+          style: styleAnalysisResults?.suggestedStyles?.map(s => s.name).join(', ') || null,
+          colors: styleAnalysisResults?.detectedColors || [],
+          includedItems: selectedItemTypes.map(t => t.toLowerCase()),
+          itemCategories: selectedItemTypes.map(t => {
+              // Map display names to vocabulary categories
+              const map: Record<string, string> = {
+                  'Dress': 'dresses', 'Top': 'tops', 'Bottom': 'bottoms',
+                  'Shoes': 'footwear', 'Outerwear': 'outerwear', 'Handbags': 'handbags',
+                  'Hair Accessories': 'hair_accessories', 'Jewelries': 'jewelry'
+              };
+              return map[t] || t.toLowerCase();
+          }),
+          excludedMaterials: [],
+          occasion: preferences.occasion || null,
+          priceRange: preferences.priceRange || null,
+          additionalNotes: '',
+      };
+      setSearchCriteria(criteria);
+      
+      // Build initial system message for chat
+      const systemMsg: RefinementChatMessage = {
+          role: 'system',
+          content: `Style analysis complete. Detected: ${criteria.style || 'N/A'}. Colors: ${criteria.colors.join(', ') || 'Any'}. Items: ${criteria.includedItems.join(', ')}.`,
+      };
+      const welcomeMsg: RefinementChatMessage = {
+          role: 'assistant',
+          content: `I've analyzed your style photos! Here's what I found:\n\n• **Style**: ${criteria.style || 'Not detected'}\n• **Colors**: ${criteria.colors.length > 0 ? criteria.colors.join(', ') : 'Any'}\n• **Items**: ${criteria.includedItems.join(', ')}\n• **Budget**: ${criteria.priceRange || 'Not set'}\n\nFeel free to refine! Try:\n• "I want a midi skirt instead of pants"\n• "Add navy and white colors"\n• "No polyester please"\n• "This is for a date night"`,
+      };
+      setChatMessages([systemMsg, welcomeMsg]);
+      setChatInput('');
+  };
+
+  // Handle sending a chat message for refinement
+  const handleChatSend = async () => {
+      const msg = chatInput.trim();
+      if (!msg || isChatLoading) return;
+
+      // Add user message to chat
+      const userMsg: RefinementChatMessage = { role: 'user', content: msg };
+      setChatMessages(prev => [...prev, userMsg]);
+      setChatInput('');
+      setIsChatLoading(true);
+
+      try {
+          const { updatedCriteria, assistantMessage } = await runChatRefinement(
+              searchCriteria,
+              chatMessages,
+              msg,
+              profile
+          );
+
+          // Merge updated criteria into current criteria
+          setSearchCriteria(prev => {
+              const merged = { ...prev };
+              if (updatedCriteria.style !== undefined) merged.style = updatedCriteria.style;
+              if (updatedCriteria.colors !== undefined) merged.colors = updatedCriteria.colors;
+              if (updatedCriteria.includedItems !== undefined) merged.includedItems = updatedCriteria.includedItems;
+              if (updatedCriteria.itemCategories !== undefined) merged.itemCategories = updatedCriteria.itemCategories;
+              if (updatedCriteria.excludedMaterials !== undefined) merged.excludedMaterials = updatedCriteria.excludedMaterials;
+              if (updatedCriteria.occasion !== undefined) merged.occasion = updatedCriteria.occasion;
+              if (updatedCriteria.priceRange !== undefined) merged.priceRange = updatedCriteria.priceRange;
+              if (updatedCriteria.additionalNotes !== undefined) merged.additionalNotes = updatedCriteria.additionalNotes;
+              return merged;
+          });
+
+          // Add assistant response with criteria snapshot
+          const assistantMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: assistantMessage,
+              criteriaSnapshot: updatedCriteria,
+          };
+          setChatMessages(prev => [...prev, assistantMsg]);
+      } catch (e) {
+          console.error("Chat error:", e);
+          const errMsg: RefinementChatMessage = {
+              role: 'assistant',
+              content: "Sorry, something went wrong. Please try again.",
+          };
+          setChatMessages(prev => [...prev, errMsg]);
+      } finally {
+          setIsChatLoading(false);
+      }
+  };
+
+  // Fire search from chat with criteria-aware category mapping
+  const handleCard1SearchFromChat = async () => {
+      setStep(AppStep.SEARCHING);
+      setIsLoading(true);
+
+      try {
+          // Build categorySpecificStyles from searchCriteria
+          // Map: for each itemCategory, check if there's a specific includedItem for it
+          // e.g. if user said "skirt" (category=bottoms), search term should be "skirt" not "bottoms"
+          const categorySpecificStyles: Record<string, string> = {};
+          
+          searchCriteria.includedItems.forEach(item => {
+              const cat = resolveItemCategory(item);
+              if (cat !== 'unknown') {
+                  // Use the specific item name as the search style
+                  // e.g. "skirt" → category "bottoms", search term "skirt"
+                  const existing = categorySpecificStyles[cat];
+                  categorySpecificStyles[cat] = existing ? `${existing}, ${item}` : item;
+              }
+          });
+
+          // Build preferences from searchCriteria
+          const chatPreferences: Preferences = {
+              ...preferences,
+              stylePreference: searchCriteria.style || preferences.stylePreference,
+              colors: searchCriteria.colors.length > 0 ? searchCriteria.colors.join(', ') : preferences.colors,
+              occasion: searchCriteria.occasion || preferences.occasion,
+              priceRange: searchCriteria.priceRange || preferences.priceRange,
+              // Use CATEGORIES (not specific items) for pipeline routing
+              itemType: searchCriteria.itemCategories.length > 0
+                  ? [...new Set(searchCriteria.itemCategories)].join(', ')
+                  : preferences.itemType,
+          };
+
+          // Build additional context from chat
+          let additionalContext = '';
+          if (searchCriteria.excludedMaterials.length > 0) {
+              additionalContext += `AVOID these materials: ${searchCriteria.excludedMaterials.join(', ')}. `;
+          }
+          if (searchCriteria.additionalNotes) {
+              additionalContext += searchCriteria.additionalNotes;
+          }
+
+          const result = await searchAndRecommendCard1(
+              profile,
+              chatPreferences,
+              styleAnalysisResults || undefined,
+              categorySpecificStyles
+          );
+
+          const newMsg: ChatMessage = {
+              role: 'model',
+              content: result.reflectionNotes,
+              data: result
+          };
+          setMessages(prev => [...prev, newMsg]);
+          setStep(AppStep.RESULTS);
+      } catch (e) {
+          console.error(e);
+          alert(`Something went wrong during the styling search. Error: ${e instanceof Error ? e.message : String(e)}`);
+          setStep(AppStep.CARD1_CHAT);
+      } finally {
+          setIsLoading(false);
+      }
   };
 
   const handleCard1Search = async () => {
@@ -681,6 +863,215 @@ export default function App() {
       // Actually, I need to inject the "Basics" list if possible.
       // `renderConfirmation` reads from `styleAnalysisResults`.
       // I'll just use `renderConfirmation` but wrap the `onContinue` in `nextStep` to handle `CARD1_CONFIRM`.
+  };
+
+  // PAGE 1D: Conversational Refinement (Chat + Living Card)
+  const renderCard1Chat = () => {
+      // chatContainerRef and auto-scroll useEffect are hoisted to App top level
+
+      // Count of active criteria items for badge
+      const criteriaCount = [
+          searchCriteria.style,
+          searchCriteria.colors.length > 0 ? searchCriteria.colors : null,
+          searchCriteria.includedItems.length > 0 ? searchCriteria.includedItems : null,
+          searchCriteria.occasion,
+          searchCriteria.priceRange,
+          searchCriteria.excludedMaterials.length > 0 ? searchCriteria.excludedMaterials : null,
+      ].filter(Boolean).length;
+
+      return (
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+              {/* Header */}
+              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+                  <div className="flex items-center justify-between">
+                      <button onClick={() => setStep(AppStep.CARD1_CONFIRM)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-stone-600" />
+                      </button>
+                      <div className="text-center">
+                          <h1 className="text-sm font-bold text-stone-900">Refine Your Search</h1>
+                          <p className="text-[10px] text-stone-400">Chat with your stylist to perfect your criteria</p>
+                      </div>
+                      <div className="w-8" /> {/* Spacer */}
+                  </div>
+              </div>
+
+              {/* Living Card (Criteria Summary) */}
+              <div className="px-4 py-3 bg-gradient-to-r from-stone-50 to-amber-50/30 border-b border-stone-100">
+                  <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Search Criteria</span>
+                      <span className="text-[10px] font-bold text-stone-500 bg-white px-2 py-0.5 rounded-full border border-stone-200">
+                          {criteriaCount} active
+                      </span>
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-1.5">
+                      {/* Style */}
+                      {searchCriteria.style && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-violet-50 text-violet-700 rounded-lg text-[11px] font-medium border border-violet-100">
+                              <Sparkles size={10} /> {searchCriteria.style}
+                          </span>
+                      )}
+                      
+                      {/* Colors */}
+                      {searchCriteria.colors.map((color, i) => (
+                          <span key={`c-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-medium border border-blue-100">
+                              <Palette size={10} /> {color}
+                          </span>
+                      ))}
+                      
+                      {/* Included Items */}
+                      {searchCriteria.includedItems.map((item, i) => (
+                          <span key={`i-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-medium border border-emerald-100">
+                              <ShoppingBag size={10} /> {item}
+                          </span>
+                      ))}
+                      
+                      {/* Occasion */}
+                      {searchCriteria.occasion && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 rounded-lg text-[11px] font-medium border border-amber-100">
+                              <Calendar size={10} /> {searchCriteria.occasion}
+                          </span>
+                      )}
+                      
+                      {/* Price */}
+                      {searchCriteria.priceRange && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-stone-100 text-stone-600 rounded-lg text-[11px] font-medium border border-stone-200">
+                              <DollarSign size={10} /> {searchCriteria.priceRange}
+                          </span>
+                      )}
+                      
+                      {/* Excluded Materials */}
+                      {searchCriteria.excludedMaterials.map((mat, i) => (
+                          <span key={`x-${i}`} className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-600 rounded-lg text-[11px] font-medium border border-red-100">
+                              <Ban size={10} /> No {mat}
+                          </span>
+                      ))}
+
+                      {/* Additional Notes */}
+                      {searchCriteria.additionalNotes && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-stone-50 text-stone-500 rounded-lg text-[11px] font-medium border border-stone-200">
+                              <StickyNote size={10} /> {searchCriteria.additionalNotes.slice(0, 30)}{searchCriteria.additionalNotes.length > 30 ? '...' : ''}
+                          </span>
+                      )}
+
+                      {criteriaCount === 0 && (
+                          <span className="text-[11px] text-stone-400 italic">No criteria set yet. Start chatting!</span>
+                      )}
+                  </div>
+              </div>
+
+              {/* Chat Messages */}
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                              msg.role === 'user' 
+                                  ? 'bg-stone-900 text-white rounded-br-md' 
+                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
+                          }`}>
+                              {/* Render message with basic formatting */}
+                              {msg.content.split('\n').map((line, li) => (
+                                  <p key={li} className={li > 0 ? 'mt-1' : ''}>
+                                      {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
+                                          if (part.startsWith('**') && part.endsWith('**')) {
+                                              return <strong key={pi}>{part.slice(2, -2)}</strong>;
+                                          }
+                                          return <span key={pi}>{part}</span>;
+                                      })}
+                                  </p>
+                              ))}
+                              
+                              {/* Show what changed if criteria updated */}
+                              {msg.criteriaSnapshot && Object.keys(msg.criteriaSnapshot).length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-stone-200/50">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Updated:</p>
+                                      <div className="flex flex-wrap gap-1">
+                                          {Object.entries(msg.criteriaSnapshot).map(([key, val]) => {
+                                              if (!val || (Array.isArray(val) && val.length === 0)) return null;
+                                              const displayVal = Array.isArray(val) ? val.join(', ') : String(val);
+                                              return (
+                                                  <span key={key} className="text-[10px] px-1.5 py-0.5 bg-white/60 rounded text-stone-500 border border-stone-200/50">
+                                                      {key}: {displayVal}
+                                                  </span>
+                                              );
+                                          })}
+                                      </div>
+                                  </div>
+                              )}
+                          </div>
+                      </div>
+                  ))}
+                  
+                  {/* Typing indicator */}
+                  {isChatLoading && (
+                      <div className="flex justify-start">
+                          <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
+                              <div className="flex gap-1.5">
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                              </div>
+                          </div>
+                      </div>
+                  )}
+              </div>
+
+              {/* Input Area */}
+              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+                  {/* Quick suggestion pills */}
+                  <div className="flex gap-2 overflow-x-auto mb-3 pb-1 scrollbar-hide">
+                      {['Add a skirt', 'No polyester', 'Date night', 'Under $150', 'Navy blue'].map(suggestion => (
+                          <button
+                              key={suggestion}
+                              onClick={() => {
+                                  setChatInput(suggestion);
+                              }}
+                              className="shrink-0 text-[11px] px-3 py-1.5 bg-stone-50 text-stone-500 rounded-full border border-stone-200 hover:bg-stone-100 hover:text-stone-700 transition-colors font-medium"
+                          >
+                              {suggestion}
+                          </button>
+                      ))}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                      <input
+                          type="text"
+                          value={chatInput}
+                          onChange={(e) => setChatInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleChatSend()}
+                          placeholder="Refine your style... (e.g. 'add a midi skirt')"
+                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          disabled={isChatLoading}
+                      />
+                      <button
+                          onClick={handleChatSend}
+                          disabled={!chatInput.trim() || isChatLoading}
+                          className={`p-3 rounded-xl transition-all ${
+                              chatInput.trim() && !isChatLoading
+                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-md' 
+                                  : 'bg-stone-100 text-stone-300'
+                          }`}
+                      >
+                          <Send size={18} />
+                      </button>
+                  </div>
+
+                  {/* Search button */}
+                  <button
+                      onClick={handleCard1SearchFromChat}
+                      disabled={searchCriteria.includedItems.length === 0 && searchCriteria.itemCategories.length === 0}
+                      className={`w-full mt-3 py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                          (searchCriteria.includedItems.length > 0 || searchCriteria.itemCategories.length > 0)
+                              ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200'
+                              : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                      }`}
+                  >
+                      <Search size={16} />
+                      Find My Style ({searchCriteria.includedItems.length} item{searchCriteria.includedItems.length !== 1 ? 's' : ''})
+                  </button>
+              </div>
+          </div>
+      );
   };
 
   const renderLanding = () => (
@@ -1578,25 +1969,16 @@ export default function App() {
   const handleGenerateStylistRecs = async () => {
       setIsGeneratingRecs(true);
       try {
-          // Resolve the style analysis (should be done by now)
-          // For now, we'll re-run or assume it's cached/available. 
-          // Ideally we pass the result from step 2A to 2B.
-          
-          // Let's re-run style analyzer quickly or use cached if we stored it.
-          // For simplicity, we'll re-trigger it or assume we have the data in 'profile' and 'preferences'.
-          // But 'styleResult' contains the vibe/colors which are crucial.
-          
-          // Better approach: Store styleAnalysisResult in state.
-          // I'll add a state for it.
-          
+          // Run style analyzer on the outfit photo for vibe/color/detail context
           const styleResult = await runStyleExampleAnalyzer(
               { ...profile, idealStyleImages: [profile.userImageBase64!] }, 
               preferences
           );
 
-          const recs = await generateStylistRecommendations(profile, preferences, styleResult);
-          setStylistRecommendation(recs.userMessage);
-          setStylistSearchQueries(recs.searchQueries);
+          // Call the Professional Stylist Agent
+          const response = await generateStylistRecommendations(profile, preferences, styleResult);
+          setStylistOutfits(response.outfits);
+          setSelectedOutfitIndex(null); // Reset selection
           setStep(AppStep.CARD2_RECOMMENDATION);
       } catch (e) {
           console.error("Stylist Recs Failed", e);
@@ -1606,23 +1988,36 @@ export default function App() {
   };
 
   const handleCard2Search = async () => {
+      if (selectedOutfitIndex === null || !stylistOutfits[selectedOutfitIndex]) return;
+      
       setStep(AppStep.SEARCHING);
       
-      // Use the stylist recommendation as the "style preference" to guide the search
-      // We now pass the specific queries map
+      // Build categorySpecificStyles from the selected outfit's recommendations
+      const selectedOutfit = stylistOutfits[selectedOutfitIndex];
+      const categorySearchMap: Record<string, string> = {};
+      const categorySet = new Set<string>();
+      
+      selectedOutfit.recommendations.forEach(rec => {
+          // Map the stylist's category to pipeline category and use serp_query as search term
+          const cat = resolveItemCategory(rec.category) !== 'unknown' 
+              ? resolveItemCategory(rec.category) 
+              : rec.category;
+          categorySearchMap[cat] = rec.serp_query;
+          categorySet.add(cat);
+      });
+
       const enhancedPreferences = {
           ...preferences,
-          // We don't overwrite stylePreference globally here, instead we pass the map
+          itemType: [...categorySet].join(', '),
       };
 
       try {
-          // Use the standard search pipeline, but it will now use the specific recommendations
           const result = await searchAndRecommend(
               profile, 
               enhancedPreferences, 
-              undefined, 
+              `Selected outfit: "${selectedOutfit.name}". ${selectedOutfit.logic}`, 
               styleAnalysisResults || undefined,
-              stylistSearchQueries // Pass the map
+              categorySearchMap
           );
           
           const newMsg: ChatMessage = {
@@ -1634,7 +2029,7 @@ export default function App() {
           setStep(AppStep.RESULTS);
       } catch (error) {
           console.error("Card 2 Search Failed", error);
-          setStep(AppStep.CARD2_RECOMMENDATION); // Go back on error
+          setStep(AppStep.CARD2_RECOMMENDATION);
       }
   };
 
@@ -1773,65 +2168,131 @@ export default function App() {
       </div>
   );
 
-  const renderCard2Recommendations = () => (
-      <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32 h-[100dvh] flex flex-col">
-          <ProgressBar currentStep={step} />
-          <div className="flex-1 overflow-y-auto">
-              <h1 className="text-2xl font-bold font-sans text-stone-900 mb-2">Stylist Recommendations</h1>
-              <p className="text-stone-500 mb-6">Here is what I recommend to complete your look.</p>
+  const renderCard2Recommendations = () => {
+      // Color role badge colors
+      const colorRoleBadge = (role?: string) => {
+          if (!role) return null;
+          const lower = role.toLowerCase();
+          if (lower.includes('60%')) return 'bg-stone-100 text-stone-700 border-stone-200';
+          if (lower.includes('30%')) return 'bg-blue-50 text-blue-700 border-blue-100';
+          if (lower.includes('10%')) return 'bg-amber-50 text-amber-700 border-amber-100';
+          return 'bg-stone-50 text-stone-500 border-stone-200';
+      };
 
-              <div className="bg-stone-50 p-6 rounded-2xl border border-stone-100 prose prose-stone prose-sm max-w-none mb-6">
-                  <div className="whitespace-pre-wrap font-sans text-stone-700 leading-relaxed">
-                      {stylistRecommendation}
+      return (
+          <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
+              <button onClick={() => setStep(AppStep.CARD2_DETAILS)} className="mb-3 p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                  <ChevronLeft size={20} className="text-stone-600" />
+              </button>
+
+              <h1 className="text-2xl font-bold font-sans text-stone-900 mb-1">Your Stylist Picks</h1>
+              <p className="text-stone-500 mb-6 text-sm">3 outfit options designed using professional styling rules. Tap to select one.</p>
+
+              {stylistOutfits.length === 0 && (
+                  <div className="text-center py-12">
+                      <p className="text-stone-400 text-sm">No outfits generated. Go back and try again.</p>
                   </div>
+              )}
+
+              <div className="space-y-4 mb-6">
+                  {stylistOutfits.map((outfit, idx) => {
+                      const isSelected = selectedOutfitIndex === idx;
+                      
+                      return (
+                          <button
+                              key={idx}
+                              onClick={() => setSelectedOutfitIndex(idx)}
+                              className={`w-full text-left p-0 rounded-2xl border-2 transition-all overflow-hidden ${
+                                  isSelected 
+                                      ? 'border-stone-900 shadow-lg shadow-stone-200 ring-1 ring-stone-900' 
+                                      : 'border-stone-200 hover:border-stone-400 shadow-sm'
+                              }`}
+                          >
+                              {/* Outfit Header */}
+                              <div className={`px-5 py-4 ${isSelected ? 'bg-stone-900 text-white' : 'bg-stone-50'}`}>
+                                  <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-3">
+                                          <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                                              isSelected ? 'bg-white text-stone-900' : 'bg-stone-200 text-stone-600'
+                                          }`}>
+                                              {idx + 1}
+                                          </span>
+                                          <h3 className={`font-bold text-sm ${isSelected ? 'text-white' : 'text-stone-900'}`}>
+                                              {outfit.name}
+                                          </h3>
+                                      </div>
+                                      {isSelected && (
+                                          <div className="bg-white text-stone-900 p-1 rounded-full">
+                                              <Check size={14} />
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+
+                              {/* Outfit Items */}
+                              <div className="px-5 py-3 space-y-2.5 bg-white">
+                                  {outfit.recommendations.map((rec, rIdx) => (
+                                      <div key={rIdx} className="flex items-start gap-3 py-1.5">
+                                          <div className="w-7 h-7 rounded-lg bg-stone-100 flex items-center justify-center shrink-0 mt-0.5">
+                                              <Tag size={12} className="text-stone-500" />
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                              <div className="flex items-center gap-2 flex-wrap">
+                                                  <span className="text-xs font-bold text-stone-400 uppercase tracking-wide">{rec.category}</span>
+                                                  {rec.color_role && (
+                                                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${colorRoleBadge(rec.color_role)}`}>
+                                                          {rec.color_role}
+                                                      </span>
+                                                  )}
+                                              </div>
+                                              <p className="text-sm font-semibold text-stone-900 truncate mt-0.5">{rec.item_name}</p>
+                                              <p className="text-[11px] text-stone-500 mt-0.5 line-clamp-2">{rec.style_reason}</p>
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+
+                              {/* Styling Logic (expanded when selected) */}
+                              {isSelected && (
+                                  <div className="px-5 py-3 bg-stone-50 border-t border-stone-100 animate-fade-in">
+                                      <h4 className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                          <Sparkles size={10} /> Styling Logic
+                                      </h4>
+                                      <p className="text-xs text-stone-600 leading-relaxed">{outfit.logic}</p>
+                                      {outfit.body_type_notes && (
+                                          <p className="text-xs text-stone-500 mt-2 italic border-t border-stone-100 pt-2">
+                                              {outfit.body_type_notes}
+                                          </p>
+                                      )}
+                                  </div>
+                              )}
+                          </button>
+                      );
+                  })}
               </div>
 
-              <div className="bg-white border border-stone-200 rounded-xl p-4 shadow-sm">
-                  <h4 className="text-sm font-bold text-stone-900 mb-2 flex items-center gap-2">
-                      <MessageSquare size={16} />
-                      Refine Suggestions
-                  </h4>
-                  <div className="flex gap-2">
-                      <input 
-                          type="text" 
-                          placeholder="e.g., No silk, I prefer cotton..." 
-                          className="flex-1 bg-stone-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-stone-900"
-                          onKeyDown={async (e) => {
-                              if (e.key === 'Enter') {
-                                  const input = e.currentTarget;
-                                  const feedback = input.value;
-                                  input.value = "Updating...";
-                                  input.disabled = true;
-                                  
-                                  // Quick hack: Append feedback to preferences and re-run
-                                  // Ideally we have a dedicated refinement agent
-                                  const newRecs = await generateStylistRecommendations(
-                                      profile, 
-                                      {...preferences, stylePreference: feedback}, // Inject feedback
-                                      { analysisStatus: 'success' } // Mock analysis result for speed or fetch real one
-                                  );
-                                  setStylistRecommendation(newRecs.userMessage);
-                                  setStylistSearchQueries(newRecs.searchQueries);
-                                  
-                                  input.value = "";
-                                  input.disabled = false;
-                              }
-                          }}
-                      />
-                      <button className="bg-stone-100 p-2 rounded-lg text-stone-600 hover:bg-stone-200">
-                          <ArrowRight size={16} />
+              {/* Search button */}
+              <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-10">
+                  <div className="max-w-md mx-auto px-4">
+                      <button
+                          onClick={handleCard2Search}
+                          disabled={selectedOutfitIndex === null}
+                          className={`w-full py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                              selectedOutfitIndex !== null
+                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200'
+                                  : 'bg-stone-100 text-stone-300 cursor-not-allowed'
+                          }`}
+                      >
+                          <Search size={16} />
+                          {selectedOutfitIndex !== null 
+                              ? `Find Items for "${stylistOutfits[selectedOutfitIndex]?.name}"` 
+                              : 'Select an outfit above'}
                       </button>
                   </div>
               </div>
           </div>
-
-          <NavigationButtons 
-              onContinue={handleCard2Search}
-              continueLabel="Find These Items"
-              onBack={() => setStep(AppStep.CARD2_DETAILS)}
-          />
-      </div>
-  );
+      );
+  };
 
   const renderIdealStyle = () => {
     return (
@@ -1914,11 +2375,11 @@ export default function App() {
 
   const renderResults = () => (
     <div className="w-full max-w-5xl mx-auto h-[100dvh] flex flex-col bg-stone-50">
-       <div className="flex-1 overflow-y-auto space-y-6 pb-24 px-4 pt-6">
+       <div className="flex-1 overflow-y-auto space-y-6 pb-32 px-4 pt-6">
           <div className="flex items-center justify-between pb-4">
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => setStep(AppStep.PREFERENCES_DASHBOARD)}
+                onClick={() => setStep(AppStep.GOAL_SELECTION)}
                 className="p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
               >
                 <ArrowLeft size={20} />
@@ -2042,6 +2503,29 @@ export default function App() {
               );
           })}
        </div>
+
+       {/* Bottom Navigation Bar */}
+       <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-10">
+           <div className="max-w-5xl mx-auto flex items-center justify-between px-4 gap-3">
+               <button 
+                   onClick={() => setStep(AppStep.GOAL_SELECTION)}
+                   className="flex items-center gap-2 px-5 h-12 border border-stone-200 rounded-xl hover:bg-stone-50 transition-colors text-sm font-medium text-stone-600"
+               >
+                   <Home size={16} />
+                   Start Over
+               </button>
+               <button 
+                   onClick={() => {
+                       setMessages([]);
+                       setStep(AppStep.GOAL_SELECTION);
+                   }}
+                   className="flex-1 bg-stone-950 text-white font-medium h-12 rounded-xl transition-all shadow-lg shadow-stone-200 hover:bg-stone-800 text-sm flex items-center justify-center gap-2"
+               >
+                   <Search size={16} />
+                   New Search
+               </button>
+           </div>
+       </div>
     </div>
   );
 
@@ -2077,6 +2561,17 @@ export default function App() {
 
   const renderProfileSetup = () => (
       <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+          {/* Back Button */}
+          <button 
+              onClick={() => {
+                  // Go back to where we came from
+                  setStep(previousStep === AppStep.PROFILE_SETUP || previousStep === AppStep.PROFILE_VIEW ? AppStep.GOAL_SELECTION : previousStep);
+              }}
+              className="mb-4 p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors"
+          >
+              <ChevronLeft size={24} />
+          </button>
+
           <div className="text-center mb-8">
               <div className="w-16 h-16 bg-stone-900 text-white rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <User size={28} />
@@ -2272,6 +2767,17 @@ export default function App() {
 
       return (
           <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+              {/* Back Button */}
+              <button 
+                  onClick={() => {
+                      setIsEditingProfile(false);
+                      setStep(previousStep === AppStep.PROFILE_SETUP || previousStep === AppStep.PROFILE_VIEW ? AppStep.GOAL_SELECTION : previousStep);
+                  }}
+                  className="mb-4 p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors"
+              >
+                  <ChevronLeft size={24} />
+              </button>
+
               {/* Profile Header */}
               <div className="text-center mb-8">
                   <div className="relative w-24 h-24 mx-auto mb-4">
@@ -2354,7 +2860,7 @@ export default function App() {
   };
 
   // --- BOTTOM NAVIGATION BAR ---
-  const showBottomNav = step !== AppStep.SEARCHING;
+  const showBottomNav = step !== AppStep.SEARCHING && step !== AppStep.CARD1_CHAT && step !== AppStep.RESULTS && step !== AppStep.CARD2_RECOMMENDATION;
   const isProfilePage = step === AppStep.PROFILE_SETUP || step === AppStep.PROFILE_VIEW;
   const isHomePage = !isProfilePage;
 
@@ -2406,6 +2912,7 @@ export default function App() {
             {step === AppStep.CARD1_DETAILS && renderCard1Details()}
             {step === AppStep.CARD1_PROFILE && renderCard1Profile()}
             {step === AppStep.CARD1_CONFIRM && renderCard1Confirm()}
+            {step === AppStep.CARD1_CHAT && renderCard1Chat()}
             {/* Card 2 Flow */}
             {step === AppStep.CARD2_DETAILS && renderCard2Details()}
             {step === AppStep.CARD2_RECOMMENDATION && renderCard2Recommendations()}
