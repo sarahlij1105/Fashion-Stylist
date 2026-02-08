@@ -269,20 +269,26 @@ ${chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}
 **USER'S NEW MESSAGE:** "${userMessage}"
 
 **YOUR TASK:**
-1. Understand what the user wants to change or add.
+1. Understand what the user wants to change, replace, or add.
 2. Return ONLY the fields that changed (not the whole criteria).
-3. **CRITICAL for includedItems:** Use the user's SPECIFIC words. If they say "skirt", put "skirt" not "bottoms". If they say "silk camisole", put "silk camisole". These are search terms.
-4. **CRITICAL for itemCategories:** Map each includedItem to its parent category for pipeline routing. "skirt" → "bottoms", "camisole" → "tops".
-5. For excludedMaterials: If user says "no polyester" or "I don't like nylon", add those.
-6. Be conversational and brief in your response.
+3. **CRITICAL: REPLACE vs ADD Logic:**
+   - If user says "I want a skirt" or "make it a skirt" or "change to skirt" → this is a **REPLACE** operation. Remove ALL items in the same category (e.g., remove "jeans", "trousers", "pants" from bottoms) and replace with the new item ("skirt"). The includedItems should contain the new item AND all items from OTHER categories that were already there.
+   - If user says "ADD a skirt" or "also include a skirt" → this is an **ADD** operation. Keep existing items and add the new one alongside them.
+   - Default behavior (no explicit "add"): treat as REPLACE within the same category.
+4. **CRITICAL for includedItems:** Use the user's SPECIFIC words. If they say "skirt", put "skirt" not "bottoms". If they say "silk camisole", put "silk camisole". These are search terms.
+5. **CRITICAL for itemCategories:** Map each includedItem to its parent category for pipeline routing. "skirt" → "bottoms", "camisole" → "tops".
+6. For excludedMaterials: If user says "no polyester" or "I don't like nylon", add those.
+7. Be conversational and brief in your response.
 
 **OUTPUT (Strict JSON):**
 \`\`\`json
 {
   "updatedCriteria": {
     // ONLY include fields that changed. Omit unchanged fields.
+    // For REPLACE: return the FULL updated includedItems list (with the replacement applied)
+    // For ADD: return the FULL updated includedItems list (with the new item appended)
     // "includedItems": ["skirt", "silk top"],  ← user's specific words
-    // "itemCategories": ["bottoms", "tops"],    ← resolved categories
+    // "itemCategories": ["bottoms", "tops"],    ← resolved categories  
     // "style": "Minimalist",
     // "colors": ["White", "Navy"],
     // "excludedMaterials": ["polyester"],
@@ -290,7 +296,7 @@ ${chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}
     // "priceRange": "$50-$200",
     // "additionalNotes": "prefers flowy fabrics"
   },
-  "assistantMessage": "Got it! Added a skirt and silk top to your search. Anything else?"
+  "assistantMessage": "Got it! Changed your bottoms to a skirt. Anything else?"
 }
 \`\`\`
 `;

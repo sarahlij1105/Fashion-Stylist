@@ -6,6 +6,53 @@ import { analyzeUserIntent, refinePreferences } from './services/agent_router';
 import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote } from 'lucide-react';
 // import ReactMarkdown from 'react-markdown';
 
+// Helper: map color name to a CSS color for visual dots
+const colorNameToCSS = (name: string): string => {
+    const n = name.toLowerCase().trim();
+    const map: Record<string, string> = {
+        'black': '#1c1917', 'white': '#f5f5f4', 'cream': '#fffdd0', 'ivory': '#fffff0',
+        'beige': '#f5f0e1', 'tan': '#d2b48c', 'brown': '#8b4513', 'chocolate': '#7b3f00',
+        'camel': '#c19a6b', 'khaki': '#c3b091', 'taupe': '#483c32',
+        'red': '#ef4444', 'burgundy': '#800020', 'wine': '#722f37', 'maroon': '#800000',
+        'coral': '#ff7f50', 'salmon': '#fa8072', 'rose': '#ff007f', 'blush': '#de5d83',
+        'pink': '#ec4899', 'hot pink': '#ff69b4', 'magenta': '#ff00ff', 'fuchsia': '#ff00ff',
+        'orange': '#f97316', 'peach': '#ffcba4', 'apricot': '#fbceb1', 'rust': '#b7410e', 'terracotta': '#e2725b',
+        'yellow': '#eab308', 'gold': '#ffd700', 'mustard': '#e1ad01', 'amber': '#ffbf00',
+        'green': '#22c55e', 'olive': '#808000', 'sage': '#9caf88', 'emerald': '#50c878',
+        'mint': '#98fb98', 'forest': '#228b22', 'hunter': '#355e3b', 'lime': '#84cc16',
+        'teal': '#008080', 'turquoise': '#40e0d0', 'aqua': '#00ffff', 'cyan': '#06b6d4',
+        'blue': '#3b82f6', 'navy': '#000080', 'navy blue': '#000080', 'cobalt': '#0047ab',
+        'royal blue': '#4169e1', 'baby blue': '#89cff0', 'sky blue': '#87ceeb', 'powder blue': '#b0e0e6',
+        'indigo': '#4b0082', 'purple': '#a855f7', 'violet': '#8b5cf6', 'lavender': '#e6e6fa',
+        'plum': '#8e4585', 'lilac': '#c8a2c8', 'mauve': '#e0b0ff',
+        'silver': '#c0c0c0', 'charcoal': '#36454f', 'grey': '#9ca3af', 'gray': '#9ca3af',
+        'pastels': '#e8d5e0', 'jewel tones': '#7c3aed', 'neutrals': '#a8a29e', 'earth tones': '#a0826d',
+        'mixed': '#9ca3af',
+    };
+    // Try exact match first
+    if (map[n]) return map[n];
+    // Try partial match
+    for (const [key, val] of Object.entries(map)) {
+        if (n.includes(key) || key.includes(n)) return val;
+    }
+    return '#9ca3af'; // default grey
+};
+
+// Category icon mapping for item pills
+const itemCatIcon = (item: string): string => {
+    const n = item.toLowerCase();
+    if (n.includes('top') || n.includes('blouse') || n.includes('shirt') || n.includes('camisole') || n.includes('sweater')) return '👕';
+    if (n.includes('bottom') || n.includes('pant') || n.includes('jean') || n.includes('skirt') || n.includes('trouser') || n.includes('short') || n.includes('legging')) return '👖';
+    if (n.includes('dress') || n.includes('gown')) return '👗';
+    if (n.includes('outer') || n.includes('jacket') || n.includes('coat') || n.includes('blazer')) return '🧥';
+    if (n.includes('foot') || n.includes('shoe') || n.includes('heel') || n.includes('boot') || n.includes('sneaker') || n.includes('sandal')) return '👟';
+    if (n.includes('bag') || n.includes('clutch') || n.includes('purse') || n.includes('tote')) return '👜';
+    if (n.includes('jewel') || n.includes('necklace') || n.includes('bracelet') || n.includes('ring') || n.includes('earring')) return '💎';
+    if (n.includes('hair') || n.includes('scarf') || n.includes('hat')) return '🎀';
+    if (n.includes('accessor')) return '✨';
+    return '🏷️';
+};
+
 const DefaultProfile: UserProfile = {
   gender: 'Female',
   estimatedSize: 'M',
@@ -874,33 +921,46 @@ export default function App() {
                       if (isFirstAssistant) {
                           return (
                               <div key={idx} className="flex justify-start">
-                                  <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
-                                      <div className="flex items-center gap-2 mb-3">
-                                          <Sparkles size={16} className="text-stone-600" />
-                                          <span className="text-sm font-bold text-stone-900">We detected</span>
+                                  <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                      <div className="flex items-center gap-2 mb-2">
+                                          <Sparkles size={16} className="text-emerald-600" />
+                                          <span className="text-sm font-bold text-emerald-700">Style Analysis</span>
                                       </div>
+                                      <p className="text-sm text-stone-700 mb-4">Here's what we detected from your photos:</p>
                                       
+                                      {searchCriteria.includedItems.length > 0 && (
+                                          <div className="mb-4">
+                                              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Detected Items</p>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {searchCriteria.includedItems.map((item, i) => (
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                          {itemCatIcon(item)} {item}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+
                                       {searchCriteria.style && (
-                                          <div className="mb-2">
-                                              <span className="text-xs text-stone-400">Style: </span>
-                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.style}</span>
+                                          <div className="mb-4">
+                                              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {searchCriteria.style.split(',').map((s, i) => (
+                                                      <span key={i} className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full text-xs font-bold text-amber-700">
+                                                          {s.trim()}
+                                                      </span>
+                                                  ))}
+                                              </div>
                                           </div>
                                       )}
                                       
                                       {searchCriteria.colors.length > 0 && (
-                                          <div className="mb-2">
-                                              <span className="text-xs text-stone-400">Overall Color: </span>
-                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.colors.join(', ')}</span>
-                                          </div>
-                                      )}
-                                      
-                                      {searchCriteria.includedItems.length > 0 && (
-                                          <div className="mb-3">
-                                              <p className="text-xs text-stone-400 mb-1.5">A combination of:</p>
-                                              <div className="flex flex-wrap gap-1.5">
-                                                  {searchCriteria.includedItems.map((item, i) => (
-                                                      <span key={i} className="px-3 py-1 bg-stone-100 text-stone-700 rounded-full text-xs font-medium capitalize">
-                                                          {item}
+                                          <div className="mb-4">
+                                              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {searchCriteria.colors.map((c, i) => (
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                                          <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
                                                       </span>
                                                   ))}
                                               </div>
@@ -909,12 +969,14 @@ export default function App() {
                                       
                                       {searchCriteria.priceRange && (
                                           <div className="mb-3">
-                                              <span className="text-xs text-stone-400">Budget: </span>
-                                              <span className="text-sm font-bold text-stone-900">{searchCriteria.priceRange}</span>
+                                              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Budget</p>
+                                              <span className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full text-xs font-bold text-emerald-700">
+                                                  {searchCriteria.priceRange}
+                                              </span>
                                           </div>
                                       )}
                                       
-                                      <p className="text-sm text-stone-600 mt-2">Is that what you're looking for?</p>
+                                      <p className="text-sm text-stone-600 mt-3">Is that what you're looking for?</p>
                                   </div>
                               </div>
                           );
@@ -2272,26 +2334,59 @@ export default function App() {
                   {/* Stylist Analysis Card (first message) */}
                   {analysisData && (
                       <div className="flex justify-start">
-                          <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
-                              <div className="flex items-center gap-2 mb-3">
-                                  <Sparkles size={16} className="text-stone-600" />
-                                  <span className="text-sm font-bold text-stone-900">Stylist Analysis</span>
+                          <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                              <div className="flex items-center gap-2 mb-2">
+                                  <Sparkles size={16} className="text-emerald-600" />
+                                  <span className="text-sm font-bold text-emerald-700">Stylist Analysis</span>
                               </div>
-                              
-                              <div className="bg-stone-50 rounded-xl p-3.5 space-y-2 mb-3">
-                                  <p className="text-sm text-stone-700">
-                                      Your current outfit style is <strong>{analysisData.style}</strong>.
-                                  </p>
-                                  <p className="text-sm text-stone-700">
-                                      Major color is <strong>{analysisData.mainColor}</strong>
-                                      {analysisData.otherColors?.length > 0 && (
-                                          <>, with other colors <strong>{analysisData.otherColors.join(', ')}</strong></>
-                                      )}.
-                                  </p>
-                                  <p className="text-sm text-stone-700">
-                                      We are going to search for <strong>{analysisData.searchItems}</strong> to match your current <strong>{analysisData.keptItems}</strong>.
-                                  </p>
+                              <p className="text-sm text-stone-700 mb-4">
+                                  Your current outfit style is <strong>{analysisData.style}</strong>.
+                              </p>
+
+                              {/* Colors */}
+                              <div className="mb-4">
+                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
+                                  <div className="flex flex-wrap gap-2">
+                                      {analysisData.mainColor && (
+                                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                              <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(analysisData.mainColor) }} /> {analysisData.mainColor}
+                                          </span>
+                                      )}
+                                      {analysisData.otherColors?.map((c: string, i: number) => (
+                                          <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                              <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                          </span>
+                                      ))}
+                                  </div>
                               </div>
+
+                              {/* Kept items */}
+                              {analysisData.keptItems && (
+                                  <div className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Keeping</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {analysisData.keptItems.split(',').map((item: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 shadow-sm">
+                                                  {itemCatIcon(item.trim())} {item.trim()}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              )}
+
+                              {/* Search items */}
+                              {analysisData.searchItems && (
+                                  <div className="mb-3">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Searching For</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {analysisData.searchItems.split(',').map((item: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full text-xs font-bold text-emerald-700">
+                                                  <Search size={10} /> {item.trim()}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              )}
                           </div>
                       </div>
                   )}
@@ -2325,42 +2420,74 @@ export default function App() {
                           <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
                               {stylistOutfits.map((outfit, idx) => {
                                   const isSelected = selectedOutfitIndex === idx;
-                                  const label = String.fromCharCode(65 + idx); // A, B, C...
+                                  // Use outfit.name as style title (max ~5 words)
+                                  const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
                                   
                                   return (
                                       <button
                                           key={idx}
                                           onClick={() => setSelectedOutfitIndex(idx)}
-                                          className={`snap-start shrink-0 w-[75%] text-left rounded-2xl border-2 transition-all overflow-hidden ${
+                                          className={`snap-start shrink-0 w-[80%] text-left rounded-2xl transition-all overflow-hidden ${
                                               isSelected 
-                                                  ? 'border-stone-900 shadow-lg' 
-                                                  : 'border-stone-200 shadow-sm'
+                                                  ? 'border-2 border-emerald-500 shadow-lg shadow-emerald-100' 
+                                                  : 'border border-stone-200 shadow-sm'
                                           }`}
                                       >
                                           {/* Card Header */}
-                                          <div className="px-4 py-3 flex items-center justify-between bg-white">
-                                              <h3 className="font-bold text-sm text-stone-900">Option {label}</h3>
-                                              {isSelected && (
-                                                  <div className="bg-stone-900 text-white p-1 rounded-full">
-                                                      <Check size={12} />
-                                                  </div>
-                                              )}
+                                          <div className="px-4 py-3.5 bg-white border-b border-stone-100">
+                                              <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
                                           </div>
                                           
                                           {/* Card Items */}
-                                          <div className="px-4 pb-4 bg-white space-y-3">
-                                              {outfit.recommendations.map((rec, rIdx) => (
-                                                  <div key={rIdx} className="border-l-2 border-stone-200 pl-3">
-                                                      <p className="text-xs font-bold text-stone-900 capitalize">{rec.category}</p>
-                                                      <p className="text-[11px] text-stone-500">Type: {rec.item_name}</p>
-                                                      {rec.color_role && (
-                                                          <p className="text-[11px] text-stone-500">Color: {rec.color_role}</p>
-                                                      )}
-                                                      {rec.style_reason && (
-                                                          <p className="text-[11px] text-stone-500">Details: {rec.style_reason}</p>
-                                                      )}
-                                                  </div>
-                                              ))}
+                                          <div className="px-3 py-3 bg-white space-y-2.5">
+                                              {outfit.recommendations.map((rec, rIdx) => {
+                                                  // Category icon and color mapping
+                                                  const catIcons: Record<string, { icon: string; bg: string; text: string }> = {
+                                                      'top': { icon: '👕', bg: 'bg-blue-50', text: 'text-blue-600' },
+                                                      'tops': { icon: '👕', bg: 'bg-blue-50', text: 'text-blue-600' },
+                                                      'bottom': { icon: '👖', bg: 'bg-indigo-50', text: 'text-indigo-600' },
+                                                      'bottoms': { icon: '👖', bg: 'bg-indigo-50', text: 'text-indigo-600' },
+                                                      'dress': { icon: '👗', bg: 'bg-pink-50', text: 'text-pink-600' },
+                                                      'dresses': { icon: '👗', bg: 'bg-pink-50', text: 'text-pink-600' },
+                                                      'outerwear': { icon: '🧥', bg: 'bg-amber-50', text: 'text-amber-600' },
+                                                      'footwear': { icon: '👟', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+                                                      'shoes': { icon: '👟', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+                                                      'handbag': { icon: '👜', bg: 'bg-purple-50', text: 'text-purple-600' },
+                                                      'handbags': { icon: '👜', bg: 'bg-purple-50', text: 'text-purple-600' },
+                                                      'jewelry': { icon: '💎', bg: 'bg-rose-50', text: 'text-rose-600' },
+                                                      'accessories': { icon: '✨', bg: 'bg-teal-50', text: 'text-teal-600' },
+                                                      'hair_accessories': { icon: '🎀', bg: 'bg-fuchsia-50', text: 'text-fuchsia-600' },
+                                                  };
+                                                  const catKey = rec.category.toLowerCase();
+                                                  const catStyle = catIcons[catKey] || { icon: '🏷️', bg: 'bg-stone-50', text: 'text-stone-600' };
+                                                  
+                                                  // Extract a short reason (first phrase before colon or period)
+                                                  const shortReason = rec.style_reason 
+                                                      ? rec.style_reason.split(/[:.]/)[0].trim()
+                                                      : '';
+                                                  
+                                                  return (
+                                                      <div key={rIdx} className={`${catStyle.bg} rounded-xl p-3`}>
+                                                          <div className="flex items-start gap-2.5">
+                                                              <span className="text-lg mt-0.5">{catStyle.icon}</span>
+                                                              <div className="flex-1 min-w-0">
+                                                                  <p className={`text-xs font-bold ${catStyle.text} capitalize`}>{rec.category}</p>
+                                                                  <p className="text-sm font-medium text-stone-900 leading-snug">{rec.item_name}</p>
+                                                                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                                                      {rec.color_role && (
+                                                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-700 bg-white px-2 py-0.5 rounded-full border border-stone-200">
+                                                                              <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} /> {rec.color_role}
+                                                                          </span>
+                                                                      )}
+                                                                  </div>
+                                                                  {shortReason && (
+                                                                      <p className="text-[11px] text-stone-500 mt-1.5 leading-snug">{shortReason}</p>
+                                                                  )}
+                                                              </div>
+                                                          </div>
+                                                      </div>
+                                                  );
+                                              })}
                                           </div>
                                       </button>
                                   );
@@ -2712,69 +2839,68 @@ export default function App() {
                   {/* Plan Analysis Card */}
                   {planData && (
                       <div className="flex justify-start">
-                          <div className="max-w-[90%] bg-white border border-stone-200 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
-                              <div className="flex items-center gap-2 mb-3">
-                                  <Sparkles size={16} className="text-stone-600" />
-                                  <span className="text-sm font-bold text-stone-900">Based on your occasion</span>
+                          <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                              <div className="flex items-center gap-2 mb-2">
+                                  <Sparkles size={16} className="text-emerald-600" />
+                                  <span className="text-sm font-bold text-emerald-700">Based on your occasion</span>
                               </div>
+                              <p className="text-sm text-stone-700 mb-4">
+                                  For "<strong>{planData.occasion}</strong>", we would recommend:
+                              </p>
 
-                              <div className="bg-stone-50 rounded-xl p-3.5 space-y-3 mb-3">
-                                  <p className="text-sm text-stone-700">
-                                      For "<strong>{planData.occasion}</strong>", we would recommend:
-                                  </p>
-                                  
-                                  {planData.items?.length > 0 && (
-                                      <div className="flex items-start gap-2">
-                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">An outfit consisting of:</span>
-                                          <div className="flex flex-wrap gap-1">
-                                              {planData.items.map((item: string, i: number) => (
-                                                  <span key={i} className="text-sm font-bold text-stone-900 capitalize">
-                                                      {item}{i < planData.items.length - 1 ? ', ' : ''}
-                                                  </span>
-                                              ))}
-                                          </div>
+                              {planData.items?.length > 0 && (
+                                  <div className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Outfit Items</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {planData.items.map((item: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                  {itemCatIcon(item)} {item}
+                                              </span>
+                                          ))}
                                       </div>
-                                  )}
+                                  </div>
+                              )}
 
-                                  {planData.styles?.length > 0 && (
-                                      <div className="flex items-start gap-2">
-                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Style:</span>
-                                          <div className="flex flex-wrap gap-1">
-                                              {planData.styles.map((s: string, i: number) => (
-                                                  <span key={i} className="text-sm font-bold text-stone-900">
-                                                      {s}{i < planData.styles.length - 1 ? ', ' : ''}
-                                                  </span>
-                                              ))}
-                                          </div>
+                              {planData.styles?.length > 0 && (
+                                  <div className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {planData.styles.map((s: string, i: number) => (
+                                              <span key={i} className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full text-xs font-bold text-amber-700">
+                                                  {s}
+                                              </span>
+                                          ))}
                                       </div>
-                                  )}
+                                  </div>
+                              )}
 
-                                  {planData.colors?.length > 0 && (
-                                      <div className="flex items-start gap-2">
-                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Color:</span>
-                                          <div className="flex flex-wrap gap-1">
-                                              {planData.colors.map((c: string, i: number) => (
-                                                  <span key={i} className="text-sm font-bold text-stone-900">
-                                                      {c}{i < planData.colors.length - 1 ? ', ' : ''}
-                                                  </span>
-                                              ))}
-                                          </div>
+                              {planData.colors?.length > 0 && (
+                                  <div className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {planData.colors.map((c: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                                  <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                              </span>
+                                          ))}
                                       </div>
-                                  )}
+                                  </div>
+                              )}
 
-                                  {planData.features?.length > 0 && (
-                                      <div className="flex items-start gap-2">
-                                          <span className="text-xs text-stone-400 w-24 shrink-0 pt-0.5">Other features:</span>
-                                          <div className="flex flex-wrap gap-1">
-                                              {planData.features.map((f: string, i: number) => (
-                                                  <span key={i} className="text-sm font-bold text-stone-900">
-                                                      {f}{i < planData.features.length - 1 ? ', ' : ''}
-                                                  </span>
-                                              ))}
-                                          </div>
+                              {planData.features?.length > 0 && (
+                                  <div className="mb-3">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Key Features</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {planData.features.map((f: string, i: number) => (
+                                              <span key={i} className="px-3 py-1.5 bg-stone-100 border border-stone-200 rounded-full text-xs font-medium text-stone-600">
+                                                  {f}
+                                              </span>
+                                          ))}
                                       </div>
-                                  )}
-                              </div>
+                                  </div>
+                              )}
+
+                              <p className="text-sm text-stone-600 mt-3">Please confirm or tell us more about your preferences/restrictions to proceed with further outfit construction.</p>
                           </div>
                       </div>
                   )}
@@ -2808,37 +2934,63 @@ export default function App() {
                           <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-hide -mx-4 px-4">
                               {stylistOutfits.map((outfit, idx) => {
                                   const isSelected = selectedOutfitIndex === idx;
-                                  const label = String.fromCharCode(65 + idx);
-
+                                  const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
+                                  
                                   return (
                                       <button
                                           key={idx}
                                           onClick={() => setSelectedOutfitIndex(idx)}
-                                          className={`snap-start shrink-0 w-[75%] text-left rounded-2xl border-2 transition-all overflow-hidden ${
-                                              isSelected ? 'border-stone-900 shadow-lg' : 'border-stone-200 shadow-sm'
+                                          className={`snap-start shrink-0 w-[80%] text-left rounded-2xl transition-all overflow-hidden ${
+                                              isSelected ? 'border-2 border-emerald-500 shadow-lg shadow-emerald-100' : 'border border-stone-200 shadow-sm'
                                           }`}
                                       >
-                                          <div className="px-4 py-3 flex items-center justify-between bg-white">
-                                              <h3 className="font-bold text-sm text-stone-900">Option {label}</h3>
-                                              {isSelected && (
-                                                  <div className="bg-stone-900 text-white p-1 rounded-full">
-                                                      <Check size={12} />
-                                                  </div>
-                                              )}
+                                          <div className="px-4 py-3.5 bg-white border-b border-stone-100">
+                                              <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
                                           </div>
-                                          <div className="px-4 pb-4 bg-white space-y-3">
-                                              {outfit.recommendations.map((rec, rIdx) => (
-                                                  <div key={rIdx} className="border-l-2 border-stone-200 pl-3">
-                                                      <p className="text-xs font-bold text-stone-900 capitalize">{rec.category}</p>
-                                                      <p className="text-[11px] text-stone-500">Type: {rec.item_name}</p>
-                                                      {rec.color_role && (
-                                                          <p className="text-[11px] text-stone-500">Color: {rec.color_role}</p>
-                                                      )}
-                                                      {rec.style_reason && (
-                                                          <p className="text-[11px] text-stone-500">Details: {rec.style_reason}</p>
-                                                      )}
-                                                  </div>
-                                              ))}
+                                          <div className="px-3 py-3 bg-white space-y-2.5">
+                                              {outfit.recommendations.map((rec, rIdx) => {
+                                                  const catIcons: Record<string, { icon: string; bg: string; text: string }> = {
+                                                      'top': { icon: '👕', bg: 'bg-blue-50', text: 'text-blue-600' },
+                                                      'tops': { icon: '👕', bg: 'bg-blue-50', text: 'text-blue-600' },
+                                                      'bottom': { icon: '👖', bg: 'bg-indigo-50', text: 'text-indigo-600' },
+                                                      'bottoms': { icon: '👖', bg: 'bg-indigo-50', text: 'text-indigo-600' },
+                                                      'dress': { icon: '👗', bg: 'bg-pink-50', text: 'text-pink-600' },
+                                                      'dresses': { icon: '👗', bg: 'bg-pink-50', text: 'text-pink-600' },
+                                                      'outerwear': { icon: '🧥', bg: 'bg-amber-50', text: 'text-amber-600' },
+                                                      'footwear': { icon: '👟', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+                                                      'shoes': { icon: '👟', bg: 'bg-emerald-50', text: 'text-emerald-600' },
+                                                      'handbag': { icon: '👜', bg: 'bg-purple-50', text: 'text-purple-600' },
+                                                      'handbags': { icon: '👜', bg: 'bg-purple-50', text: 'text-purple-600' },
+                                                      'jewelry': { icon: '💎', bg: 'bg-rose-50', text: 'text-rose-600' },
+                                                      'accessories': { icon: '✨', bg: 'bg-teal-50', text: 'text-teal-600' },
+                                                      'hair_accessories': { icon: '🎀', bg: 'bg-fuchsia-50', text: 'text-fuchsia-600' },
+                                                  };
+                                                  const catKey = rec.category.toLowerCase();
+                                                  const catStyle = catIcons[catKey] || { icon: '🏷️', bg: 'bg-stone-50', text: 'text-stone-600' };
+                                                  const shortReason = rec.style_reason ? rec.style_reason.split(/[:.]/)[0].trim() : '';
+                                                  
+                                                  return (
+                                                      <div key={rIdx} className={`${catStyle.bg} rounded-xl p-3`}>
+                                                          <div className="flex items-start gap-2.5">
+                                                              <span className="text-lg mt-0.5">{catStyle.icon}</span>
+                                                              <div className="flex-1 min-w-0">
+                                                                  <p className={`text-xs font-bold ${catStyle.text} capitalize`}>{rec.category}</p>
+                                                                  <p className="text-sm font-medium text-stone-900 leading-snug">{rec.item_name}</p>
+                                                                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                                                                      {rec.color_role && (
+                                                                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-stone-700 bg-white px-2 py-0.5 rounded-full border border-stone-200">
+                                                                              <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} /> {rec.color_role}
+                                                                          </span>
+                                                                      )}
+                                                                  </div>
+                                                                  {shortReason && (
+                                                                      <p className="text-[11px] text-stone-500 mt-1.5 leading-snug">{shortReason}</p>
+                                                                  )}
+                                                              </div>
+                                                          </div>
+                                                      </div>
+                                                  );
+                                              })}
                                           </div>
                                       </button>
                                   );
@@ -3017,7 +3169,7 @@ export default function App() {
               >
                 <ArrowLeft size={20} />
               </button>
-              <h2 className="text-xl font-bold font-sans text-stone-900">Elite Forensic Stylist</h2>
+              <h2 className="text-xl font-bold font-sans text-stone-900">Search Results</h2>
             </div>
           </div>
 
@@ -3047,12 +3199,18 @@ export default function App() {
                           </div>
                       </div>
 
-                      <div className="bg-stone-900 text-stone-50 p-6 rounded-2xl shadow-lg">
-                          <h3 className="text-xs uppercase tracking-widest font-semibold text-stone-400 mb-2 flex items-center gap-2">
-                             <ShieldCheck size={14}/> Forensic Audit Log
-                          </h3>
-                          <p className="font-serif leading-relaxed text-lg whitespace-pre-line">{msg.data?.reflectionNotes}</p>
-                      </div>
+                      {/* Duration summary — extract total latency from reflectionNotes */}
+                      {(() => {
+                          const notes = msg.data?.reflectionNotes || '';
+                          const latencyMatch = notes.match(/Total Latency:\s*(\d+)ms/);
+                          const duration = latencyMatch ? `${(Number(latencyMatch[1]) / 1000).toFixed(1)}s` : null;
+                          return duration ? (
+                              <div className="flex items-center gap-2 text-xs text-stone-400">
+                                  <CheckCircle2 size={12} className="text-green-500" />
+                                  <span>Search completed in {duration}</span>
+                              </div>
+                          ) : null;
+                      })()}
 
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                           {msg.data?.recommendations.map((outfit, rIdx) => (
@@ -3572,14 +3730,17 @@ export default function App() {
         {step === AppStep.SEARCHING && (
              <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-center p-6">
                  <div className="w-16 h-16 border-4 border-stone-100 border-t-stone-900 rounded-full animate-spin mb-8"></div>
-                 <h3 className="text-2xl font-bold font-sans text-stone-900 mb-2">Running Forensic Audit</h3>
+                 <h3 className="text-2xl font-bold font-sans text-stone-900 mb-2">Searching for you</h3>
                  <p className="text-stone-500 max-w-md animate-pulse">
-                     Checking stock levels, aesthetic anchors, and link integrity...
+                     Finding the best items across online stores...
                  </p>
-                 {profile.idealStyleImages.length > 0 && (
-                     <div className="mt-4 flex items-center gap-2 text-xs font-bold text-stone-400 bg-stone-100 px-3 py-1 rounded-full">
-                         <Sparkles size={12} />
-                         Analyzing {profile.idealStyleImages.length} Example Images
+                 {selectedItemTypes.length > 0 && (
+                     <div className="mt-4 flex flex-wrap justify-center gap-2">
+                         {selectedItemTypes.map((item, i) => (
+                             <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-600 bg-stone-100 px-3 py-1.5 rounded-full">
+                                 <Search size={10} /> {item}
+                             </span>
+                         ))}
                      </div>
                  )}
              </div>
