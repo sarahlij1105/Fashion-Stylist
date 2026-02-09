@@ -791,7 +791,11 @@ When recommending styles, colors, features, and items for non-extracted fields, 
 - **Time/Activity-aware**: Evening → deeper tones, shimmer ok. Dancing → flexible. Walking → comfortable shoes.
 - **Body-aware**: Pregnant → empire waist, stretchy. Petite → elongating lines.
 
-**STEP 4 — suggestedAdditionalItems Rules:**
+**STEP 4 — EXCLUSIVE ITEM RULES:**
+- "dresses" and "tops"+"bottoms" are MUTUALLY EXCLUSIVE. If recommending a dress, do NOT also include tops or bottoms. If recommending tops+bottoms, do NOT also include dresses. Pick one approach per outfit.
+- If the user explicitly asked for a "dress", use dresses (not tops+bottoms). If the user asked for "top" or "bottom" or "skirt" or "pants", use tops+bottoms (not dresses).
+
+**STEP 5 — suggestedAdditionalItems Rules:**
 - ONLY populate if the user EXPLICITLY mentioned 1-2 specific items (extracted.items = true). Suggest complementary items.
 - If extracted.items = false, set suggestedAdditionalItems to [] and put the full recommended outfit in "items".
 - If the user already requested 3+ items, return [].
@@ -963,6 +967,7 @@ Return strict JSON: { "outfits": [...], "refined_constraints": "" }`;
 4. FINAL VALIDATION: One-Statement Rule. No absolute rule violations.
 
 Create exactly 3 distinct outfit options with different personalities (e.g., one classic, one trendy, one bold). ONLY recommend items in the requested categories — do NOT add extra categories.
+EXCLUSIVE RULE: "dresses" and "tops"+"bottoms" are mutually exclusive. If the requested categories include "dresses", do NOT recommend tops or bottoms. If they include "tops" or "bottoms", do NOT recommend dresses.
 For each item, generate a serp_query (Google Shopping search string) that includes ALL relevant details: color, material, feature keywords (e.g., "glittery", "floral", "silk"), and style. The serp_query is used directly for product search — it must be specific enough to find the right items. Each style_reason must cite a specific guide rule.
 IMPORTANT: If "Key Features/Requirements" are listed (e.g., "glittery", "lace", "silk"), every relevant item MUST incorporate those features in both item_name and serp_query.
 Output strict JSON with this exact structure:
@@ -1051,6 +1056,52 @@ Output strict JSON with this exact structure:
             }
         }
 
+        // Post-generation safety: enforce dress vs top+bottom mutual exclusion
+        // If an outfit has a dress, remove tops/bottoms. If it has tops or bottoms, remove dresses.
+        const dressAliases = ['dress', 'dresses', 'gown'];
+        const topAliases = ['top', 'tops', 'shirt', 'blouse', 'camisole', 'sweater', 'tee'];
+        const bottomAliases = ['bottom', 'bottoms', 'pants', 'skirt', 'jeans', 'shorts', 'trousers'];
+
+        for (const outfit of parsed.outfits) {
+            if (!outfit.recommendations || !Array.isArray(outfit.recommendations)) continue;
+            const cats = outfit.recommendations.map((r: any) => r.category?.toLowerCase().trim() || '');
+            const hasDress = cats.some((c: string) => dressAliases.some(a => c.includes(a)));
+            const hasTopOrBottom = cats.some((c: string) => topAliases.some(a => c.includes(a)) || bottomAliases.some(a => c.includes(a)));
+
+            if (hasDress && hasTopOrBottom) {
+                // Prefer whichever was in the requested categories; fallback to dress
+                const requestedLower = targetItems.toLowerCase();
+                const userWantsDress = dressAliases.some(a => requestedLower.includes(a));
+                const userWantsTopBottom = topAliases.some(a => requestedLower.includes(a)) || bottomAliases.some(a => requestedLower.includes(a));
+
+                if (userWantsDress && !userWantsTopBottom) {
+                    // Keep dress, remove tops/bottoms
+                    const before = outfit.recommendations.length;
+                    outfit.recommendations = outfit.recommendations.filter((r: any) => {
+                        const c = r.category?.toLowerCase().trim() || '';
+                        return !(topAliases.some(a => c.includes(a)) || bottomAliases.some(a => c.includes(a)));
+                    });
+                    if (outfit.recommendations.length < before) console.log(`[Stylist Agent] Removed tops/bottoms from dress outfit "${outfit.name}"`);
+                } else if (userWantsTopBottom && !userWantsDress) {
+                    // Keep tops/bottoms, remove dress
+                    const before = outfit.recommendations.length;
+                    outfit.recommendations = outfit.recommendations.filter((r: any) => {
+                        const c = r.category?.toLowerCase().trim() || '';
+                        return !dressAliases.some(a => c.includes(a));
+                    });
+                    if (outfit.recommendations.length < before) console.log(`[Stylist Agent] Removed dresses from top+bottom outfit "${outfit.name}"`);
+                } else {
+                    // Ambiguous: default to keeping dress (more complete look)
+                    const before = outfit.recommendations.length;
+                    outfit.recommendations = outfit.recommendations.filter((r: any) => {
+                        const c = r.category?.toLowerCase().trim() || '';
+                        return !(topAliases.some(a => c.includes(a)) || bottomAliases.some(a => c.includes(a)));
+                    });
+                    if (outfit.recommendations.length < before) console.log(`[Stylist Agent] Removed conflicting tops/bottoms from "${outfit.name}" (defaulted to dress)`);
+                }
+            }
+        }
+
         const result = {
             outfits: parsed.outfits,
             refined_constraints: parsed.refined_constraints || ""
@@ -1133,6 +1184,7 @@ Rules:
 - For color changes: also update color_role. Optionally adjust 1-2 items for color harmony.
 - For feature/texture changes (e.g., "glittery", "floral", "silk", "lace"): update item_name AND serp_query to include the feature. Example: "glittery dress" → serp_query: "women's glittery sequin midi dress", item_name: "Glittery Sequin Midi Dress".
 - Maintain the same number of items/categories.
+- EXCLUSIVE RULE: "dresses" and "tops"+"bottoms" are mutually exclusive. Never include both in the same outfit.
 - Update the "logic" field to explain changes, citing style guide rules.
 - Output strict JSON — a single outfit object (NOT wrapped in an array):
   { "name": "...", "logic": "...", "body_type_notes": "...", "recommendations": [{ "category": "...", "item_name": "...", "serp_query": "...", "style_reason": "...", "color_role": "..." }] }`;
