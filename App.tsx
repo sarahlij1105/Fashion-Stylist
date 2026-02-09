@@ -122,6 +122,27 @@ const itemCatIcon = (item: string): string => {
     return '🏷️';
 };
 
+// Simplify detailed item names (e.g., "Midi-Length A-Line Dress" → "Dress") for the style card
+const simplifyItemName = (item: string): string => {
+    const n = item.toLowerCase();
+    if (n.includes('dress') || n.includes('gown')) return 'Dress';
+    if (n.includes('top') || n.includes('blouse') || n.includes('shirt') || n.includes('camisole') || n.includes('sweater') || n.includes('tee') || n.includes('tank')) return 'Top';
+    if (n.includes('pant') || n.includes('jean') || n.includes('trouser') || n.includes('legging')) return 'Bottoms';
+    if (n.includes('skirt')) return 'Skirt';
+    if (n.includes('short')) return 'Shorts';
+    if (n.includes('jacket') || n.includes('coat') || n.includes('blazer') || n.includes('cardigan') || n.includes('outer')) return 'Outerwear';
+    if (n.includes('pashmina') || n.includes('shawl') || n.includes('wrap') || n.includes('scarf')) return 'Wrap/Shawl';
+    if (n.includes('heel') || n.includes('sandal') || n.includes('boot') || n.includes('sneaker') || n.includes('shoe') || n.includes('flat') || n.includes('loafer') || n.includes('foot')) return 'Footwear';
+    if (n.includes('bag') || n.includes('clutch') || n.includes('purse') || n.includes('tote')) return 'Handbag';
+    if (n.includes('jewel') || n.includes('necklace') || n.includes('bracelet') || n.includes('earring') || n.includes('ring')) return 'Jewelry';
+    if (n.includes('hair') || n.includes('hat') || n.includes('headband')) return 'Hair Accessory';
+    if (n.includes('watch')) return 'Watch';
+    if (n.includes('belt')) return 'Belt';
+    if (n.includes('sunglasses') || n.includes('glasses')) return 'Sunglasses';
+    // Fallback: capitalize the original
+    return item.split(' ').slice(0, 2).join(' ');
+};
+
 const DefaultProfile: UserProfile = {
   gender: 'Female',
   estimatedSize: 'M',
@@ -3380,6 +3401,7 @@ export default function App() {
               itemType: card3Plan.items.join(', '),
               stylePreference: card3Plan.styles.join(', '),
               colors: card3Plan.colors.join(', '),
+              location: card3Plan.features.join(', '), // features → location field for downstream
           };
 
           const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis, card3Plan.context);
@@ -3611,6 +3633,11 @@ export default function App() {
           // Update plan AND selectedItemTypes if criteria changed
           const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
           if (criteriaChanged) {
+              // Normalize colors: agent might return a string instead of array
+              if (updatedCriteria.colors && typeof updatedCriteria.colors === 'string') {
+                  updatedCriteria.colors = (updatedCriteria.colors as unknown as string).split(/[,/&]/).map(c => c.trim()).filter(Boolean);
+              }
+
               setCard3Plan(prev => {
                   if (!prev) return prev;
                   const newStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles;
@@ -3663,10 +3690,15 @@ export default function App() {
               setShowReviewStyleCard(true);
           }
 
-          // --- AWAIT PARALLEL OUTFIT REFINEMENT ---
+          // --- NON-BLOCKING OUTFIT REFINEMENT ---
           // The refinement was started earlier in parallel with runChatRefinement.
           // Also trigger if criteria changed but feedback wasn't detected by keywords.
-          const shouldAlsoRefine = stylistOutfits.length > 0 && criteriaChanged && !outfitRefinementPromise;
+          // IMPORTANT: We do NOT await this — it runs in the background so the chat
+          // input is unlocked immediately after the chat refinement completes.
+          //
+          // KEY: If criteria changed (e.g., user said "only red and black"), the early-fired
+          // refinement used stale preferences. Replace it with a NEW refinement using updated criteria.
+          const shouldAlsoRefine = stylistOutfits.length > 0 && criteriaChanged;
           if (shouldAlsoRefine && stylistOutfits[targetIdx]) {
               setIsGeneratingRecs(true);
               const latestItems = updatedCriteria.includedItems || card3Plan?.items || [];
@@ -3682,13 +3714,16 @@ export default function App() {
                   colors: latestColors.join(', '),
                   location: latestFeatures.join(', '),
               };
+              // Discard the early-fired (stale) refinement and start fresh with updated criteria
               outfitRefinementPromise = refineSingleOutfit(stylistOutfits[targetIdx], msg, profile, regenPrefs, buildDecisionSummary());
           }
 
-          if (outfitRefinementPromise) {
-              try {
-                  const refinedOutfit = await outfitRefinementPromise;
+          // Track whether the user explicitly changed colors (for backwards sync guard)
+          const userExplicitlyChangedColors = !!(updatedCriteria.colors && updatedCriteria.colors.length > 0);
 
+          if (outfitRefinementPromise) {
+              // Run outfit refinement in the background — do NOT block the chat
+              outfitRefinementPromise.then(refinedOutfit => {
                   // Store as pending — don't insert into chat yet, wait for user to click button
                   setPendingRefinedOutfit(refinedOutfit);
                   setShowUpdatedRecommendation(true);
@@ -3700,39 +3735,53 @@ export default function App() {
                   // When the user refines an outfit, the stylist may make coordinating changes
                   // (e.g., updating accessories to match a new dress color). Sync these back
                   // to the global style card so it stays current with the actual outfit state.
-                  // The style card in chat is NOT changed — only the underlying card3Plan state.
-                  // The user can optionally view the updated card via "Review Style Card" button.
-                  const outfitColors = refinedOutfit.recommendations
-                      .map(r => r.color_role)
-                      .filter(Boolean)
-                      .flatMap(c => c!.split(/[,/&]/).map(s => s.trim()))
-                      .filter(c => c.length > 0 && c.toLowerCase() !== 'any');
-                  const outfitCategories = refinedOutfit.recommendations.map(r => r.category).filter(Boolean);
+                  // GUARD: If user explicitly changed colors (e.g., "only red and black"),
+                  // do NOT add back old outfit colors — respect the user's intent.
+                  if (!userExplicitlyChangedColors) {
+                      const outfitColors = refinedOutfit.recommendations
+                          .map(r => r.color_role)
+                          .filter(Boolean)
+                          .flatMap(c => c!.split(/[,/&]/).map(s => s.trim()))
+                          .filter(c => c.length > 0 && c.toLowerCase() !== 'any');
+                      const outfitCategories = refinedOutfit.recommendations.map(r => r.category).filter(Boolean);
 
-                  setCard3Plan(prev => {
-                      if (!prev) return prev;
-                      const existingColorsLower = new Set(prev.colors.map(c => c.toLowerCase()));
-                      const newColors = [...new Set(outfitColors.filter(c => !existingColorsLower.has(c.toLowerCase())))];
-                      const existingItemsLower = new Set(prev.items.map(i => i.toLowerCase()));
-                      const newItems = [...new Set(outfitCategories.filter(i => !existingItemsLower.has(i.toLowerCase())))];
-                      if (newColors.length > 0 || newItems.length > 0) {
-                          return {
-                              ...prev,
-                              colors: newColors.length > 0 ? [...prev.colors, ...newColors] : prev.colors,
-                              items: newItems.length > 0 ? [...prev.items, ...newItems] : prev.items,
-                          };
+                      setCard3Plan(prev => {
+                          if (!prev) return prev;
+                          const existingColorsLower = new Set(prev.colors.map(c => c.toLowerCase()));
+                          const newColors = [...new Set(outfitColors.filter(c => !existingColorsLower.has(c.toLowerCase())))];
+                          const existingItemsLower = new Set(prev.items.map(i => i.toLowerCase()));
+                          const newItems = [...new Set(outfitCategories.filter(i => !existingItemsLower.has(i.toLowerCase())))];
+                          if (newColors.length > 0 || newItems.length > 0) {
+                              return {
+                                  ...prev,
+                                  colors: newColors.length > 0 ? [...prev.colors, ...newColors] : prev.colors,
+                                  items: newItems.length > 0 ? [...prev.items, ...newItems] : prev.items,
+                              };
+                          }
+                          return prev;
+                      });
+
+                      // Track backwards-synced colors as user-modified for highlighting
+                      if (outfitColors.length > 0) {
+                          setUserModifiedValues(existing => ({
+                              ...existing,
+                              colors: [...new Set([...existing.colors, ...outfitColors.filter(c =>
+                                  !existing.colors.some(e => e.toLowerCase() === c.toLowerCase())
+                              )])],
+                          }));
                       }
-                      return prev;
-                  });
-
-                  // Track backwards-synced colors as user-modified for highlighting
-                  if (outfitColors.length > 0) {
-                      setUserModifiedValues(existing => ({
-                          ...existing,
-                          colors: [...new Set([...existing.colors, ...outfitColors.filter(c =>
-                              !existing.colors.some(e => e.toLowerCase() === c.toLowerCase())
-                          )])],
-                      }));
+                  } else {
+                      // User explicitly set colors — only sync item categories, not colors
+                      const outfitCategories = refinedOutfit.recommendations.map(r => r.category).filter(Boolean);
+                      setCard3Plan(prev => {
+                          if (!prev) return prev;
+                          const existingItemsLower = new Set(prev.items.map(i => i.toLowerCase()));
+                          const newItems = [...new Set(outfitCategories.filter(i => !existingItemsLower.has(i.toLowerCase())))];
+                          if (newItems.length > 0) {
+                              return { ...prev, items: [...prev.items, ...newItems] };
+                          }
+                          return prev;
+                      });
                   }
 
                   // Surface the Review Style Card button so user can optionally inspect the updated card
@@ -3756,16 +3805,16 @@ export default function App() {
                       content: `I've refined **Option ${String.fromCharCode(65 + targetIdx)}** based on your request! Tap the **"View Updated Recommendation"** button to see the updated outfit.`,
                   };
                   setChatMessages(prev => [...prev, regenMsg]);
-              } catch (regenErr) {
+              }).catch(regenErr => {
                   console.error('Outfit refinement failed:', regenErr);
                   const regenErrMsg: RefinementChatMessage = {
                       role: 'assistant',
                       content: `I updated the style card but couldn't refine the outfit. Please try again.`,
                   };
                   setChatMessages(prev => [...prev, regenErrMsg]);
-              } finally {
+              }).finally(() => {
                   setIsGeneratingRecs(false);
-              }
+              });
           }
       } catch (e) {
           console.error('Card 3 chat error:', e);
@@ -3950,20 +3999,31 @@ export default function App() {
                               (ext.styles ? extractedSections : suggestedSections).push(section);
                           }
 
-                          // Items
+                          // Items — simplified names (e.g., "Midi-Length A-Line Dress" → "Dress"), deduplicated
                           if (pd.items?.length > 0) {
                               const sortedItems = prioritize(pd.items, 'items');
+                              // Deduplicate after simplification (e.g., two dress variants → one "Dress")
+                              const seen = new Set<string>();
+                              const simplifiedItems = sortedItems.map((item: string) => ({
+                                  original: item,
+                                  simple: simplifyItemName(item),
+                              })).filter(({ simple }: { simple: string }) => {
+                                  const key = simple.toLowerCase();
+                                  if (seen.has(key)) return false;
+                                  seen.add(key);
+                                  return true;
+                              });
                               const section = (
                                   <div key="items" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Outfit Items</p>
                                       <div className="flex flex-wrap gap-1.5">
-                                          {sortedItems.map((item: string, i: number) => (
+                                          {simplifiedItems.map(({ original, simple }: { original: string; simple: string }, i: number) => (
                                               <span key={i} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold capitalize shadow-sm ${
-                                                  isModified('items', item)
+                                                  isModified('items', original)
                                                       ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-[#D4AF6A] text-amber-900 ring-1 ring-[#D4AF6A]/30'
                                                       : 'bg-white border border-rose-200 text-stone-800'
                                               }`}>
-                                                  {isModified('items', item) && <span>★</span>}{itemCatIcon(item)} {item}
+                                                  {isModified('items', original) && <span>★</span>}{itemCatIcon(original)} {simple}
                                               </span>
                                           ))}
                                       </div>
@@ -3972,9 +4032,9 @@ export default function App() {
                               (ext.items ? extractedSections : suggestedSections).push(section);
                           }
 
-                          // Colors
+                          // Colors — max 3 shown (user-modified values prioritized first)
                           if (pd.colors?.length > 0) {
-                              const sortedColors = prioritize(pd.colors, 'colors');
+                              const sortedColors = prioritize(pd.colors, 'colors').slice(0, 3);
                               const section = (
                                   <div key="colors" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Color Palette</p>
@@ -3995,9 +4055,9 @@ export default function App() {
                               (ext.colors ? extractedSections : suggestedSections).push(section);
                           }
 
-                          // Features
+                          // Features — max 3 shown (user-modified values prioritized first)
                           if (pd.features?.length > 0) {
-                              const sortedFeatures = prioritize(pd.features, 'features');
+                              const sortedFeatures = prioritize(pd.features, 'features').slice(0, 3);
                               const section = (
                                   <div key="features" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Key Features</p>

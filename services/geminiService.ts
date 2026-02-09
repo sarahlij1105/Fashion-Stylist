@@ -319,12 +319,18 @@ Common item-to-category mappings:
 4. **includedItems:** Use the user's SPECIFIC words as search terms.
 5. **itemCategories:** Map each includedItem to its parent category.
 6. **excludedMaterials:** If user says "no polyester", add those.
-7. **USER PREFERENCE PRIORITY for colors:** User's explicit color preferences ALWAYS take priority. "I like pink" → Pink as FIRST color. "change to pink" → replace ALL. "no olive" → REMOVE and suggest alternative. Same priority for styles, items, features.
+7. **USER PREFERENCE PRIORITY for colors:** User's explicit color preferences ALWAYS take priority.
+   - "I like pink" → colors: ["Pink", ...existing]. Pink as FIRST color.
+   - "I only want red or black" → colors: ["Red", "Black"]. REPLACE ALL existing colors entirely.
+   - "change to pink" → colors: ["Pink"]. Replace ALL.
+   - "no olive" → REMOVE olive and suggest an alternative color.
+   - Same priority logic for styles, items, features.
+   - IMPORTANT: "colors" field MUST be a JSON array of strings (e.g., ["Red", "Black"]), never a comma-separated string.
 8. **Negative feedback:** "I don't want X" → Remove X and suggest alternative. NEVER respond with "I don't understand" for fashion requests.
 9. Be conversational and brief. Confirm what you changed.
 
 **OUTPUT (Strict JSON — assistantMessage MUST be the FIRST field):**
-{"assistantMessage": "Got it! ...", "updatedCriteria": { /* ONLY changed fields */ }}`;
+{"assistantMessage": "Got it! ...", "updatedCriteria": { "colors": ["Red", "Black"], ... /* ONLY changed fields */ }}`;
 
         // Include accumulated decision summary for agent coherence
         const memorySummary = decisionSummary
@@ -769,10 +775,10 @@ Read the user's input carefully and extract ALL contextual signals. These are NO
 
 **STEP 2 — EXTRACTION RULES (standard fields):**
 - **occasion**: Infer the occasion from the user's input. Map casual phrases to standard occasions. If no occasion is mentioned, set to "" and extracted.occasion = false.
-- **items**: If the user mentions specific clothing, extract those as category names from the available list. If no items mentioned, extracted.items = false.
+- **items**: If the user mentions specific clothing, extract those as simple category names (e.g., "dresses", "footwear", "outerwear" — NOT detailed descriptions). If no items mentioned, extracted.items = false.
 - **styles**: If the user mentions style/vibe words, extract them. If not mentioned, extracted.styles = false.
-- **colors**: If the user mentions colors, extract them. If not mentioned, extracted.colors = false.
-- **features**: If the user mentions fabric, fit, or detail preferences, extract them. If not mentioned, extracted.features = false.
+- **colors**: If the user mentions colors, extract them. **Maximum 3 colors** — pick the most impactful ones. If not mentioned, extracted.colors = false.
+- **features**: If the user mentions fabric, fit, or detail preferences, extract them. **Maximum 3 features** — pick the most important ones. If not mentioned, extracted.features = false.
 
 **STEP 3 — USE CONTEXT + STYLE GUIDE FOR SMARTER RECOMMENDATIONS:**
 When recommending styles, colors, features, and items for non-extracted fields, USE the extracted context AND the STYLE GUIDE RULES (if provided) heavily:
@@ -814,7 +820,7 @@ Only include context fields that the user mentioned or strongly implied. Set all
 **User Size:** ${profile.estimatedSize || 'Not specified'}
 ${styleGuideSection}
 Generate the style card now. You MUST return a complete JSON with ALL these fields populated:
-- "occasion" (string), "items" (array of clothing categories), "styles" (array), "colors" (array of 3-5 colors), "features" (array)
+- "occasion" (string), "items" (array of simple category names like "dresses", "footwear"), "styles" (array), "colors" (array, max 3), "features" (array, max 3)
 - "context" (object with culture/role/season/venue etc), "summary" (one sentence), "extracted" (object of booleans), "suggestedAdditionalItems" (array)
 Even for fields the user didn't mention, YOU MUST recommend suitable values — never leave items/styles/colors/features as empty arrays.`;
 
@@ -941,6 +947,7 @@ export const generateStylistRecommendations = async (
 - Occasion: ${preferences.occasion || 'General / Not specified'}
 - Budget: ${preferences.priceRange || 'Not specified'}
 ${preferences.colors ? `- Preferred Colors: ${preferences.colors}` : ''}
+${preferences.location ? `- Key Features/Requirements: ${preferences.location} (MUST incorporate these into item_name AND serp_query)` : ''}
 ${contextStr ? `**OCCASION CONTEXT:** ${contextStr}` : ''}
 
 Generate exactly 3 distinct outfit options. Each outfit MUST have a "name", "logic", "body_type_notes", and a "recommendations" array with one object per requested category.
@@ -955,7 +962,8 @@ Return strict JSON: { "outfits": [...], "refined_constraints": "" }`;
 4. FINAL VALIDATION: One-Statement Rule. No absolute rule violations.
 
 Create exactly 3 distinct outfit options with different personalities (e.g., one classic, one trendy, one bold). ONLY recommend items in the requested categories — do NOT add extra categories.
-For each item, generate a serp_query (Google Shopping search string). Each style_reason must cite a specific guide rule.
+For each item, generate a serp_query (Google Shopping search string) that includes ALL relevant details: color, material, feature keywords (e.g., "glittery", "floral", "silk"), and style. The serp_query is used directly for product search — it must be specific enough to find the right items. Each style_reason must cite a specific guide rule.
+IMPORTANT: If "Key Features/Requirements" are listed (e.g., "glittery", "lace", "silk"), every relevant item MUST incorporate those features in both item_name and serp_query.
 Output strict JSON with this exact structure:
 {
   "outfits": [
@@ -1112,6 +1120,7 @@ ${baseOutfitJson}
 **USER'S ADJUSTMENT REQUEST:** "${userAdjustment}"
 
 Apply the adjustment. Align with ALL Key Features/Requirements above.
+CRITICAL: For every item affected by the adjustment, you MUST update BOTH item_name AND serp_query to reflect the change. The serp_query is used for shopping search — if the user wants "glittery", the serp_query MUST include "glittery" or equivalent terms.
 Return a single JSON outfit object (NOT an array) with: "name", "logic", "body_type_notes", and a "recommendations" array where each item has "category", "item_name", "serp_query" (starting with "${genderLabel}"), "style_reason", "color_role".`;
 
         // Static refinement instructions → systemInstruction for implicit caching
@@ -1119,7 +1128,9 @@ Return a single JSON outfit object (NOT an array) with: "name", "logic", "body_t
 Rules:
 - PRIORITIZE the user's adjustment request — this is the most important change.
 - Align the refined outfit with ALL Key Features/Requirements listed.
-- For color changes: update color_role, item_name, serp_query. Optionally adjust 1-2 items for color harmony.
+- For EVERY changed item, you MUST update ALL of these fields together: item_name, serp_query, style_reason, and color_role. The serp_query MUST reflect the updated item description (e.g., if user wants "glittery dress", serp_query must include "glittery" or "sequin" or "sparkle").
+- For color changes: also update color_role. Optionally adjust 1-2 items for color harmony.
+- For feature/texture changes (e.g., "glittery", "floral", "silk", "lace"): update item_name AND serp_query to include the feature. Example: "glittery dress" → serp_query: "women's glittery sequin midi dress", item_name: "Glittery Sequin Midi Dress".
 - Maintain the same number of items/categories.
 - Update the "logic" field to explain changes, citing style guide rules.
 - Output strict JSON — a single outfit object (NOT wrapped in an array):
