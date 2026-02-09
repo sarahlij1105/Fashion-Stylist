@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
 import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, resolveItemCategory, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { analyzeUserIntent, refinePreferences } from './services/agent_router';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote, Clock, Heart } from 'lucide-react';
+import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote, Clock, Heart, FileText } from 'lucide-react';
 // import ReactMarkdown from 'react-markdown';
 
 // Helper: map color name to a CSS color for visual dots
@@ -142,6 +142,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ currentStep }) => {
 
 export default function App() {
   const [step, setStep] = useState<AppStep>(AppStep.GOAL_SELECTION);
+  const prevStepBeforeResultsRef = useRef<AppStep>(AppStep.GOAL_SELECTION); // tracks where user was before results
   const [profile, setProfile] = useState<UserProfile>(DefaultProfile);
   const [preferences, setPreferences] = useState<Preferences>(DefaultPreferences);
   const [isLoading, setIsLoading] = useState(false);
@@ -189,13 +190,15 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<RefinementChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [card3OccasionInput, setCard3OccasionInput] = useState('');
-  const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; summary: string } | null>(null);
+  const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; context?: Record<string, string>; summary: string } | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [showReviewStyleCard, setShowReviewStyleCard] = useState(false); // floating button to review updated style card
 
   // Hoisted ref for chat container auto-scroll
   const chatContainerRef = React.useRef<HTMLDivElement>(null);
   const prevChatMessageCountRef = React.useRef<number>(0);
   const heroImageRequestIdRef = React.useRef<number>(0); // Cancellation guard for background hero image gen
+  const prevGenderRef = React.useRef<string>(DefaultProfile.gender); // Track previous gender for stale-data clearing
 
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
@@ -289,6 +292,36 @@ export default function App() {
           chatContainerRef.current.scrollTop = 0;
       }
       prevChatMessageCountRef.current = chatMessages.length;
+  }, [step]);
+
+  // Clear all recommendation-related state when profile gender changes
+  // This prevents stale male/female outfits from persisting across profile switches
+  useEffect(() => {
+      if (prevGenderRef.current !== profile.gender) {
+          console.log(`[Profile] Gender changed: ${prevGenderRef.current} → ${profile.gender}. Clearing stale recommendations.`);
+          setStylistOutfits([]);
+          setCard3Plan(null);
+          setSelectedOutfitIndex(null);
+          setLikedOutfitIndex(null);
+          setStyleAnalysisResults(null);
+          setIsGeneratingRecs(false);
+          setChatMessages([]);
+          heroImageRequestIdRef.current++;
+          prevGenderRef.current = profile.gender;
+      }
+  }, [profile.gender]);
+
+  // Clear all flow-specific state when returning to the home page
+  // Ensures a clean slate for any new flow the user starts
+  useEffect(() => {
+      if (step === AppStep.GOAL_SELECTION) {
+          setStylistOutfits([]);
+          setCard3Plan(null);
+          setSelectedOutfitIndex(null);
+          setLikedOutfitIndex(null);
+          setIsGeneratingRecs(false);
+          heroImageRequestIdRef.current++;
+      }
   }, [step]);
 
   // Hoisted from renderCard1Confirm - resolve analysis promise when it changes
@@ -391,6 +424,7 @@ export default function App() {
 
   const handleSearch = async (customPrompt?: string) => {
     archiveCurrentSearch();
+    prevStepBeforeResultsRef.current = step;
     setStep(AppStep.SEARCHING);
     setIsLoading(true);
 
@@ -674,6 +708,7 @@ export default function App() {
   // Fire search from chat with criteria-aware category mapping
   const handleCard1SearchFromChat = async () => {
       archiveCurrentSearch();
+      prevStepBeforeResultsRef.current = step;
       setStep(AppStep.SEARCHING);
       setIsLoading(true);
 
@@ -736,6 +771,7 @@ export default function App() {
 
   const handleCard1Search = async () => {
     archiveCurrentSearch();
+    prevStepBeforeResultsRef.current = step;
     setStep(AppStep.SEARCHING);
     setIsLoading(true);
 
@@ -1123,7 +1159,6 @@ export default function App() {
   const renderLanding = () => {
     const quickSearches = [
         { label: 'Wedding Guest', icon: '💍' },
-        { label: 'Graduation', icon: '🎓' },
         { label: 'Interview', icon: '💼' },
         { label: 'Date Night', icon: '💕' },
         { label: 'Work/Office', icon: '🏢' },
@@ -1131,44 +1166,44 @@ export default function App() {
     ];
 
     return (
-    <div className="max-w-md mx-auto px-6 pt-14 animate-fade-in pb-32 bg-[#FFFBF8] min-h-full">
+    <div className="max-w-md mx-auto px-5 pt-14 animate-fade-in pb-28 bg-[#FFFBF8] min-h-full">
        {/* Hero Icon */}
-       <div className="flex justify-center mb-6">
-           <div className="w-14 h-14 rounded-full bg-gradient-to-br from-pink-100 to-rose-100 border border-rose-200/50 flex items-center justify-center shadow-sm">
-               <Sparkles size={24} className="text-[#C67B88]" />
+       <div className="flex justify-center mb-3">
+           <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pink-100 to-rose-100 border border-rose-200/50 flex items-center justify-center shadow-sm">
+               <Sparkles size={20} className="text-[#C67B88]" />
            </div>
        </div>
 
-       <h1 className="text-3xl font-bold font-serif text-stone-900 mb-1.5 text-center leading-tight">What are you looking for?</h1>
-       <p className="text-sm text-[#8B6F7D] mb-7 text-center">Let's create the perfect outfit for your special moment</p>
+       <h1 className="text-xl font-bold font-serif text-stone-900 mb-1 text-center leading-tight">What are you looking for?</h1>
+       <p className="text-xs text-[#8B6F7D] mb-4 text-center">Let's create the perfect outfit for your special moment</p>
 
        {/* Search Box */}
-       <div className="relative mb-6">
+       <div className="relative mb-4">
            <input 
              type="text"
              value={searchQuery}
              onChange={(e) => setSearchQuery(e.target.value)}
-             placeholder="e.g. find me an outfit for a date night on Valentin..."
-             className="w-full p-4 pr-14 bg-white/80 border-2 border-rose-200/50 rounded-2xl shadow-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all text-sm"
+             placeholder="e.g. find me an outfit for a date night..."
+             className="w-full p-3.5 pr-13 bg-white/80 border-2 border-rose-200/50 rounded-2xl shadow-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all text-sm"
              onKeyDown={(e) => e.key === 'Enter' && handleSmartEntry()}
            />
            <button 
              onClick={handleSmartEntry}
              disabled={!searchQuery.trim()}
-             className={`absolute right-3 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${
+             className={`absolute right-2.5 top-1/2 -translate-y-1/2 p-2 rounded-xl transition-all ${
                  searchQuery.trim()
                      ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
                      : 'bg-pink-50 text-rose-300'
              }`}
            >
-             <Send size={18} />
+             <Send size={16} />
            </button>
        </div>
 
        {/* Quick Searches */}
-       <div className="mb-6">
-           <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-widest mb-3">Quick Searches</p>
-           <div className="grid grid-cols-3 gap-1.5">
+       <div className="mb-4">
+           <p className="text-[9px] font-bold text-[#8B6F7D] uppercase tracking-widest mb-2">Quick Searches</p>
+           <div className="flex flex-wrap gap-1.5">
                {quickSearches.map((qs) => (
                    <button
                        key={qs.label}
@@ -1176,27 +1211,27 @@ export default function App() {
                            setSearchQuery(qs.label);
                            handleCard3GoToChat(qs.label);
                        }}
-                       className="inline-flex items-center justify-center gap-1 px-2 py-1.5 bg-white border border-rose-200 rounded-full text-[11px] font-medium text-stone-700 hover:border-[#C67B88] hover:shadow-sm transition-all"
+                       className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-rose-200 rounded-full text-[10px] font-medium text-stone-700 hover:border-[#C67B88] hover:shadow-sm transition-all whitespace-nowrap"
                    >
-                       <span className="text-xs">{qs.icon}</span> {qs.label}
+                       <span className="text-[10px]">{qs.icon}</span>{qs.label}
                    </button>
                ))}
            </div>
        </div>
 
        {/* Style Tip */}
-       <div className="bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl p-4 mb-8">
-           <div className="flex items-center gap-2 mb-1.5">
-               <Sparkles size={14} className="text-[#C67B88]" />
-               <p className="text-xs font-bold text-[#C67B88]">Style Tip</p>
+       <div className="bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-xl p-3 mb-5">
+           <div className="flex items-center gap-1.5 mb-1">
+               <Sparkles size={12} className="text-[#C67B88]" />
+               <p className="text-[10px] font-bold text-[#C67B88]">Style Tip</p>
            </div>
-           <p className="text-xs text-[#8B6F7D] leading-relaxed">The more details you share about your occasion, the better we can tailor recommendations to match your needs!</p>
+           <p className="text-[10px] text-[#8B6F7D] leading-relaxed">The more details you share, the better we can tailor recommendations!</p>
        </div>
 
        {/* Divider */}
-       <div className="relative mb-6">
+       <div className="relative mb-4">
            <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-rose-200/50" /></div>
-           <div className="relative flex justify-center"><span className="bg-[#FFFBF8] px-4 text-xs text-[#8B6F7D]">or if you already have an outfit/idea</span></div>
+           <div className="relative flex justify-center"><span className="bg-[#FFFBF8] px-3 text-[10px] text-[#8B6F7D]">or if you already have an outfit/idea</span></div>
        </div>
 
        {/* Card 1 & Card 2 */}
@@ -1212,14 +1247,14 @@ export default function App() {
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD1_DETAILS);
              }}
-             className="flex flex-col items-start gap-3 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-left shadow-sm"
+             className="flex flex-col items-center gap-2 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-center shadow-sm"
           >
              <div className="w-10 h-10 bg-gradient-to-br from-pink-50 to-rose-50 text-[#C67B88] rounded-xl flex items-center justify-center border border-pink-100">
                  <Sparkles size={18} />
              </div>
              <div>
-                 <h3 className="font-bold text-sm text-stone-900 mb-0.5">Shop me this style</h3>
-                 <p className="text-[11px] text-[#8B6F7D] leading-snug">Upload outfit photos to find similar pieces</p>
+                 <h3 className="font-bold text-xs text-stone-900 mb-0.5">Shop me this style</h3>
+                 <p className="text-[10px] text-[#8B6F7D] leading-snug">Upload photos to find similar pieces</p>
              </div>
           </button>
 
@@ -1234,14 +1269,14 @@ export default function App() {
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD2_DETAILS);
              }}
-             className="flex flex-col items-start gap-3 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-left shadow-sm"
+             className="flex flex-col items-center gap-2 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-center shadow-sm"
           >
              <div className="w-10 h-10 bg-gradient-to-br from-pink-50 to-rose-50 text-[#C67B88] rounded-xl flex items-center justify-center border border-pink-100">
                  <Layers size={18} />
              </div>
              <div>
-                 <h3 className="font-bold text-sm text-stone-900 mb-0.5">Find items to match</h3>
-                 <p className="text-[11px] text-[#8B6F7D] leading-snug">Upload your outfit to discover matching pieces</p>
+                 <h3 className="font-bold text-xs text-stone-900 mb-0.5">Find items to match</h3>
+                 <p className="text-[10px] text-[#8B6F7D] leading-snug">Upload outfit to discover matches</p>
              </div>
           </button>
        </div>
@@ -2029,6 +2064,7 @@ export default function App() {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
       
       archiveCurrentSearch();
+      prevStepBeforeResultsRef.current = step;
       setStep(AppStep.SEARCHING);
       
       const selectedOutfit = stylistOutfits[likedOutfitIndex];
@@ -2543,41 +2579,41 @@ export default function App() {
                       const isLiked = likedOutfitIndex === selectedOutfitIndex;
                       const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
                       return (
-                          <div className="pt-1">
+                          <div className="pt-0.5">
                               {/* Card */}
-                              <div className={`rounded-2xl overflow-hidden transition-all border-2 ${isLiked ? 'border-[#C67B88] shadow-lg shadow-rose-100' : 'border-rose-200 shadow-sm'}`}>
+                              <div className={`rounded-xl overflow-hidden transition-all border-2 ${isLiked ? 'border-[#C67B88] shadow-lg shadow-rose-100' : 'border-rose-200 shadow-sm'}`}>
                                   {/* Title + Liked badge */}
-                                  <div className="bg-gradient-to-b from-rose-50/80 to-white px-4 pt-4 pb-3 text-center">
-                                      <h3 className="font-serif text-xl font-semibold text-stone-900">{styleTitle}</h3>
+                                  <div className="bg-gradient-to-b from-rose-50/80 to-white px-3 pt-2.5 pb-2 text-center">
+                                      <h3 className="font-serif text-base font-semibold text-stone-900">{styleTitle}</h3>
                                       {isLiked && (
-                                          <p className="text-xs text-[#C67B88] font-medium mt-1 flex items-center justify-center gap-1">
-                                              <Heart size={12} className="fill-[#C67B88] text-[#C67B88]" /> Liked
+                                          <p className="text-[10px] text-[#C67B88] font-medium mt-0.5 flex items-center justify-center gap-1">
+                                              <Heart size={10} className="fill-[#C67B88] text-[#C67B88]" /> Liked
                                           </p>
                                       )}
                                   </div>
 
                                   {/* Hero Image */}
                                   {outfit.heroImageBase64 ? (
-                                      <div className="w-full aspect-[3/4] bg-stone-50 overflow-hidden">
+                                      <div className="w-full aspect-[4/5] bg-stone-50 overflow-hidden">
                                           <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
                                       </div>
                                   ) : (
-                                      <div className="w-full aspect-[3/4] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
+                                      <div className="w-full aspect-[4/5] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
                                           <div className="text-center text-[#C67B88]/50">
-                                              <div className="w-10 h-10 border-3 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-3" />
-                                              <p className="text-xs font-medium">Generating preview...</p>
+                                              <div className="w-8 h-8 border-2 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-2" />
+                                              <p className="text-[10px] font-medium">Generating preview...</p>
                                           </div>
                                       </div>
                                   )}
 
                                   {/* Item pills */}
-                                  <div className="px-3 py-3 bg-white flex gap-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+                                  <div className="px-2.5 py-2 bg-white flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
                                       {outfit.recommendations.map((rec, rIdx) => (
-                                          <span key={rIdx} className="inline-flex items-center gap-1.5 shrink-0 px-3.5 py-2 bg-stone-50 border border-stone-200 rounded-full text-xs font-medium text-stone-700">
+                                          <span key={rIdx} className="inline-flex items-center gap-1 shrink-0 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-full text-[10px] font-medium text-stone-700">
                                               {rec.item_name.split(' ').slice(0, 3).join(' ')}
                                               {rec.color_role && (
                                                   <>
-                                                      <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
+                                                      <span className="w-2 h-2 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
                                                       <span className="text-stone-400">{rec.color_role.split(' ').slice(0, 2).join(' ')}</span>
                                                   </>
                                               )}
@@ -2587,36 +2623,36 @@ export default function App() {
                               </div>
 
                               {/* Navigation: Prev / Like / Next */}
-                              <div className="flex items-center justify-center gap-4 mt-4">
+                              <div className="flex items-center justify-center gap-3 mt-2.5">
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev > 0 ? prev - 1 : stylistOutfits.length - 1)}
-                                      className="w-12 h-12 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
+                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
                                   >
-                                      <ChevronLeft size={22} />
+                                      <ChevronLeft size={18} />
                                   </button>
                                   <button
                                       onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
-                                      className={`px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all ${
+                                      className={`px-5 py-2 rounded-full font-bold text-xs flex items-center gap-1.5 transition-all ${
                                           isLiked
                                               ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
                                               : 'bg-stone-100 border border-stone-200 text-stone-400 hover:bg-stone-200'
                                       }`}
                                   >
-                                      <Heart size={16} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
+                                      <Heart size={14} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
                                   </button>
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev < stylistOutfits.length - 1 ? prev + 1 : 0)}
-                                      className="w-12 h-12 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
+                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
                                   >
-                                      <ChevronRight size={22} />
+                                      <ChevronRight size={18} />
                                   </button>
                               </div>
 
                               {/* Dot indicators */}
                               {stylistOutfits.length > 1 && (
-                                  <div className="flex justify-center gap-1.5 mt-3">
+                                  <div className="flex justify-center gap-1.5 mt-2">
                                       {stylistOutfits.map((_, dIdx) => (
-                                          <button key={dIdx} onClick={() => setSelectedOutfitIndex(dIdx)} className={`w-2 h-2 rounded-full transition-all ${dIdx === selectedOutfitIndex ? 'bg-[#C67B88] w-4' : 'bg-rose-200'}`} />
+                                          <button key={dIdx} onClick={() => setSelectedOutfitIndex(dIdx)} className={`w-1.5 h-1.5 rounded-full transition-all ${dIdx === selectedOutfitIndex ? 'bg-[#C67B88] w-3' : 'bg-rose-200'}`} />
                                       ))}
                                   </div>
                               )}
@@ -2688,6 +2724,7 @@ export default function App() {
   // --- CARD 3 FLOW ---
 
   const handleCard3GoToChat = async (userInput: string) => {
+      console.log(`[Card3] Starting new flow. Profile gender: ${profile.gender}, input: "${userInput}"`);
       setPreferences(prev => ({ ...prev, purpose: FashionPurpose.NEW_OUTFIT }));
       setStep(AppStep.CARD3_CHAT);
       setIsLoading(true);
@@ -2699,6 +2736,7 @@ export default function App() {
       setLikedOutfitIndex(null);
       setStyleAnalysisResults(null);
       setIsGeneratingRecs(false);
+      setShowReviewStyleCard(false);
       heroImageRequestIdRef.current++;
 
       // Show user's original message in the chat
@@ -2750,6 +2788,9 @@ export default function App() {
 
   const handleCard3Confirm = async () => {
       if (!card3Plan) return;
+      setShowReviewStyleCard(false); // hide review button once confirming
+
+      console.log(`[Card3 Confirm] Generating recommendations. Profile gender: ${profile.gender}`);
 
       // Add user confirmation message to chat
       const confirmMsg: RefinementChatMessage = {
@@ -2776,7 +2817,7 @@ export default function App() {
               colors: card3Plan.colors.join(', '),
           };
 
-          const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis);
+          const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis, card3Plan.context);
           setStylistOutfits(response.outfits);
           setSelectedOutfitIndex(0);
 
@@ -2806,6 +2847,7 @@ export default function App() {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
 
       archiveCurrentSearch();
+      prevStepBeforeResultsRef.current = step;
       setStep(AppStep.SEARCHING);
       const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
@@ -2932,8 +2974,11 @@ export default function App() {
           };
           setChatMessages(prev => [...prev, assistantMsg]);
 
-          // If outfits already exist, refine only the selected outfit (not all 3)
+          // Show floating "Review Style Card" button if criteria changed and outfits not yet generated
           const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
+          if (criteriaChanged && stylistOutfits.length === 0) {
+              setShowReviewStyleCard(true);
+          }
           if (criteriaChanged && stylistOutfits.length > 0 && selectedOutfitIndex !== null) {
               const baseOutfit = stylistOutfits[selectedOutfitIndex];
               const optionLabel = String.fromCharCode(65 + selectedOutfitIndex);
@@ -3114,22 +3159,57 @@ export default function App() {
                           // Occasion
                           if (pd.occasion) {
                               const section = (
-                                  <div key="occasion" className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1.5">Occasion</p>
-                                      <p className="text-sm font-bold text-stone-900">{pd.occasion}</p>
+                                  <div key="occasion" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Occasion</p>
+                                      <p className="text-xs font-bold text-stone-900">{pd.occasion}</p>
                                   </div>
                               );
                               (ext.occasion ? extractedSections : suggestedSections).push(section);
                           }
 
+                          // Context (culture, role, season, venue, etc.) — always extracted from user
+                          const ctx = pd.context || {};
+                          const contextEntries = Object.entries(ctx).filter(([_, v]) => v && v !== 'null');
+                          if (contextEntries.length > 0) {
+                              const contextLabelMap: Record<string, string> = {
+                                  culture: '🌍 Culture',
+                                  role: '👤 Role',
+                                  season: '🌤 Season',
+                                  weather: '🌡 Weather',
+                                  venue: '📍 Venue',
+                                  formality: '🎩 Formality',
+                                  timeOfDay: '🕐 Time',
+                                  location: '📌 Location',
+                                  activityLevel: '🏃 Activity',
+                                  bodyConsiderations: '💫 Special',
+                                  companions: '👥 With',
+                                  dressCode: '👔 Dress Code',
+                                  ageGroup: '🎂 Age Group',
+                              };
+                              const section = (
+                                  <div key="context" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Context</p>
+                                      <div className="flex flex-wrap gap-1.5">
+                                          {contextEntries.map(([k, v]) => (
+                                              <span key={k} className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200 rounded-full text-[10px] font-bold text-violet-700">
+                                                  {contextLabelMap[k] || k}: {String(v)}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                              // Context is always from the user's input
+                              (ext.context ? extractedSections : suggestedSections).push(section);
+                          }
+
                           // Styles
                           if (pd.styles?.length > 0) {
                               const section = (
-                                  <div key="styles" className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
-                                      <div className="flex flex-wrap gap-2">
+                                  <div key="styles" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Style</p>
+                                      <div className="flex flex-wrap gap-1.5">
                                           {pd.styles.map((s: string, i: number) => (
-                                              <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-xs font-bold text-rose-700">
+                                              <span key={i} className="px-2 py-1 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-[10px] font-bold text-rose-700">
                                                   {s}
                                               </span>
                                           ))}
@@ -3142,11 +3222,11 @@ export default function App() {
                           // Items
                           if (pd.items?.length > 0) {
                               const section = (
-                                  <div key="items" className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Outfit Items</p>
-                                      <div className="flex flex-wrap gap-2">
+                                  <div key="items" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Outfit Items</p>
+                                      <div className="flex flex-wrap gap-1.5">
                                           {pd.items.map((item: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-rose-200 rounded-full text-[10px] font-bold text-stone-800 capitalize shadow-sm">
                                                   {itemCatIcon(item)} {item}
                                               </span>
                                           ))}
@@ -3159,12 +3239,12 @@ export default function App() {
                           // Colors
                           if (pd.colors?.length > 0) {
                               const section = (
-                                  <div key="colors" className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
-                                      <div className="flex flex-wrap gap-2">
+                                  <div key="colors" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Color Palette</p>
+                                      <div className="flex flex-wrap gap-1.5">
                                           {pd.colors.map((c: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
-                                                  <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-rose-200 rounded-full text-[10px] font-bold text-stone-700 shadow-sm">
+                                                  <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
                                               </span>
                                           ))}
                                       </div>
@@ -3176,11 +3256,11 @@ export default function App() {
                           // Features
                           if (pd.features?.length > 0) {
                               const section = (
-                                  <div key="features" className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Key Features</p>
-                                      <div className="flex flex-wrap gap-2">
+                                  <div key="features" className="mb-2.5">
+                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Key Features</p>
+                                      <div className="flex flex-wrap gap-1.5">
                                           {pd.features.map((f: string, i: number) => (
-                                              <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-xs font-medium text-amber-800">
+                                              <span key={i} className="px-2 py-1 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-[10px] font-medium text-amber-800">
                                                   {f}
                                               </span>
                                           ))}
@@ -3192,11 +3272,16 @@ export default function App() {
 
                           return (
                               <div key={idx} className="flex justify-start">
-                                  <div className="max-w-[90%] bg-[#FFFBF8] border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                  <div className="max-w-[90%] bg-[#FFFBF8] border border-pink-100 rounded-2xl rounded-bl-md px-3 py-3 shadow-sm">
                                       {/* Title */}
-                                      <div className="flex items-center gap-2 mb-4">
-                                          <Sparkles size={18} className="text-[#C67B88]" />
-                                          <span className="text-lg font-bold font-serif text-[#C67B88]">Your Style Card</span>
+                                      <div className="flex items-center gap-1.5 mb-2.5">
+                                          <Sparkles size={14} className="text-[#C67B88]" />
+                                          <span className="text-sm font-bold font-serif text-[#C67B88]">
+                                              {pd._isReview ? 'Updated Style Card' : 'Your Style Card'}
+                                          </span>
+                                          {pd._isReview && (
+                                              <span className="text-[8px] font-bold text-white bg-gradient-to-r from-[#C67B88] to-[#B56A78] px-1.5 py-0.5 rounded-full ml-1">REVISED</span>
+                                          )}
                                       </div>
 
                                       {/* Extracted sections (from user) */}
@@ -3207,9 +3292,9 @@ export default function App() {
                                       {/* Divider — only show if there are both extracted and suggested */}
                                       {suggestedSections.length > 0 && (
                                           <>
-                                              <div className="flex items-center gap-3 my-4">
+                                              <div className="flex items-center gap-2 my-2.5">
                                                   <div className="flex-1 h-px bg-stone-200" />
-                                                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Suggestions</span>
+                                                  <span className="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Suggestions</span>
                                                   <div className="flex-1 h-px bg-stone-200" />
                                               </div>
                                               <div>{suggestedSections}</div>
@@ -3267,41 +3352,41 @@ export default function App() {
                       const isLiked = likedOutfitIndex === selectedOutfitIndex;
                       const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
                       return (
-                          <div className="pt-1">
+                          <div className="pt-0.5">
                               {/* Card */}
-                              <div className={`rounded-2xl overflow-hidden transition-all border-2 ${isLiked ? 'border-[#C67B88] shadow-lg shadow-rose-100' : 'border-rose-200 shadow-sm'}`}>
+                              <div className={`rounded-xl overflow-hidden transition-all border-2 ${isLiked ? 'border-[#C67B88] shadow-lg shadow-rose-100' : 'border-rose-200 shadow-sm'}`}>
                                   {/* Title + Liked badge */}
-                                  <div className="bg-gradient-to-b from-rose-50/80 to-white px-4 pt-4 pb-3 text-center">
-                                      <h3 className="font-serif text-xl font-semibold text-stone-900">{styleTitle}</h3>
+                                  <div className="bg-gradient-to-b from-rose-50/80 to-white px-3 pt-2.5 pb-2 text-center">
+                                      <h3 className="font-serif text-base font-semibold text-stone-900">{styleTitle}</h3>
                                       {isLiked && (
-                                          <p className="text-xs text-[#C67B88] font-medium mt-1 flex items-center justify-center gap-1">
-                                              <Heart size={12} className="fill-[#C67B88] text-[#C67B88]" /> Liked
+                                          <p className="text-[10px] text-[#C67B88] font-medium mt-0.5 flex items-center justify-center gap-1">
+                                              <Heart size={10} className="fill-[#C67B88] text-[#C67B88]" /> Liked
                                           </p>
                                       )}
                                   </div>
 
                                   {/* Hero Image */}
                                   {outfit.heroImageBase64 ? (
-                                      <div className="w-full aspect-[3/4] bg-stone-50 overflow-hidden">
+                                      <div className="w-full aspect-[4/5] bg-stone-50 overflow-hidden">
                                           <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
                                       </div>
                                   ) : (
-                                      <div className="w-full aspect-[3/4] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
+                                      <div className="w-full aspect-[4/5] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
                                           <div className="text-center text-[#C67B88]/50">
-                                              <div className="w-10 h-10 border-3 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-3" />
-                                              <p className="text-xs font-medium">Generating preview...</p>
+                                              <div className="w-8 h-8 border-2 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-2" />
+                                              <p className="text-[10px] font-medium">Generating preview...</p>
                                           </div>
                                       </div>
                                   )}
 
                                   {/* Item pills */}
-                                  <div className="px-3 py-3 bg-white flex gap-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+                                  <div className="px-2.5 py-2 bg-white flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
                                       {outfit.recommendations.map((rec, rIdx) => (
-                                          <span key={rIdx} className="inline-flex items-center gap-1.5 shrink-0 px-3.5 py-2 bg-stone-50 border border-stone-200 rounded-full text-xs font-medium text-stone-700">
+                                          <span key={rIdx} className="inline-flex items-center gap-1 shrink-0 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-full text-[10px] font-medium text-stone-700">
                                               {rec.item_name.split(' ').slice(0, 3).join(' ')}
                                               {rec.color_role && (
                                                   <>
-                                                      <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
+                                                      <span className="w-2 h-2 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
                                                       <span className="text-stone-400">{rec.color_role.split(' ').slice(0, 2).join(' ')}</span>
                                                   </>
                                               )}
@@ -3311,36 +3396,36 @@ export default function App() {
                               </div>
 
                               {/* Navigation: Prev / Like / Next */}
-                              <div className="flex items-center justify-center gap-4 mt-4">
+                              <div className="flex items-center justify-center gap-3 mt-2.5">
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev > 0 ? prev - 1 : stylistOutfits.length - 1)}
-                                      className="w-12 h-12 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
+                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
                                   >
-                                      <ChevronLeft size={22} />
+                                      <ChevronLeft size={18} />
                                   </button>
                                   <button
                                       onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
-                                      className={`px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all ${
+                                      className={`px-5 py-2 rounded-full font-bold text-xs flex items-center gap-1.5 transition-all ${
                                           isLiked
                                               ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
                                               : 'bg-stone-100 border border-stone-200 text-stone-400 hover:bg-stone-200'
                                       }`}
                                   >
-                                      <Heart size={16} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
+                                      <Heart size={14} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
                                   </button>
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev < stylistOutfits.length - 1 ? prev + 1 : 0)}
-                                      className="w-12 h-12 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
+                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
                                   >
-                                      <ChevronRight size={22} />
+                                      <ChevronRight size={18} />
                                   </button>
                               </div>
 
                               {/* Dot indicators */}
                               {stylistOutfits.length > 1 && (
-                                  <div className="flex justify-center gap-1.5 mt-3">
+                                  <div className="flex justify-center gap-1.5 mt-2">
                                       {stylistOutfits.map((_, dIdx) => (
-                                          <button key={dIdx} onClick={() => setSelectedOutfitIndex(dIdx)} className={`w-2 h-2 rounded-full transition-all ${dIdx === selectedOutfitIndex ? 'bg-[#C67B88] w-4' : 'bg-rose-200'}`} />
+                                          <button key={dIdx} onClick={() => setSelectedOutfitIndex(dIdx)} className={`w-1.5 h-1.5 rounded-full transition-all ${dIdx === selectedOutfitIndex ? 'bg-[#C67B88] w-3' : 'bg-rose-200'}`} />
                                       ))}
                                   </div>
                               )}
@@ -3377,6 +3462,38 @@ export default function App() {
                       </div>
                   )}
               </div>
+
+              {/* Floating "Review Style Card" button — shown after user modifies the plan via chat */}
+              {showReviewStyleCard && card3Plan && stylistOutfits.length === 0 && (
+                  <div className="flex justify-center px-4 py-2 bg-[#FFFBF8]">
+                      <button
+                          onClick={() => {
+                              // Insert the latest style card as a new chat message
+                              // Get the latest extracted flags from the existing system message
+                              const existingSysMsg = chatMessages.find(m => m.role === 'system' && m.content.includes('card3_plan'));
+                              let existingExtracted: any = {};
+                              if (existingSysMsg) {
+                                  try { existingExtracted = JSON.parse(existingSysMsg.content).extracted || {}; } catch {}
+                              }
+                              const latestPlanMsg: RefinementChatMessage = {
+                                  role: 'system',
+                                  content: JSON.stringify({
+                                      type: 'card3_plan',
+                                      ...card3Plan,
+                                      extracted: existingExtracted,
+                                      _isReview: true, // marker so UI can label this as "Updated"
+                                  }),
+                              };
+                              setChatMessages(prev => [...prev, latestPlanMsg]);
+                              setShowReviewStyleCard(false);
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#D4AF6A] to-[#C49B5A] text-white rounded-full shadow-md hover:shadow-lg transition-all text-sm font-bold"
+                      >
+                          <FileText size={16} />
+                          Review Style Card
+                      </button>
+                  </div>
+              )}
 
               {/* Input Area */}
               <div className="border-t border-rose-100/50 bg-[#FFFBF8] px-4 py-3 pb-6">
@@ -3626,7 +3743,7 @@ export default function App() {
           <div className="flex items-center justify-between pb-4">
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => setStep(AppStep.GOAL_SELECTION)}
+                onClick={() => setStep(prevStepBeforeResultsRef.current || AppStep.GOAL_SELECTION)}
                 className="p-2 -ml-2 text-[#8B6F7D] hover:text-stone-900 hover:bg-rose-50 rounded-full transition-colors"
               >
                 <ArrowLeft size={20} />

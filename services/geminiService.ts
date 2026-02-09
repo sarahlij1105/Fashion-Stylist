@@ -472,74 +472,144 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
  * Given an occasion, generates a quick recommendation for outfit composition,
  * style direction, color palette, and other features using fashion vocabulary.
  */
-export const generateOccasionPlan = async (
-    userInput: string,
-    profile: UserProfile
-): Promise<{
+export interface OccasionPlanContext {
+    culture?: string;       // e.g. "Chinese", "Mexican", "Indian"
+    role?: string;          // e.g. "bride", "bridesmaid", "guest", "host"
+    season?: string;        // e.g. "summer", "winter", "spring"
+    weather?: string;       // e.g. "hot and humid", "cold", "rainy"
+    venue?: string;         // e.g. "outdoor garden", "rooftop bar", "office"
+    formality?: string;     // e.g. "black tie", "semi-formal", "casual"
+    ageGroup?: string;      // e.g. "young professional", "mature"
+    bodyConsiderations?: string; // e.g. "pregnant", "postpartum", "petite"
+    activityLevel?: string; // e.g. "lots of dancing", "seated dinner", "walking tour"
+    timeOfDay?: string;     // e.g. "evening", "morning", "all day"
+    location?: string;      // e.g. "New York", "beach town", "Tokyo"
+    companions?: string;    // e.g. "with kids", "date", "girls' night"
+    dressCode?: string;     // e.g. "cocktail attire", "white party", "all black"
+}
+
+export type OccasionPlanResult = {
     occasion: string;
     items: string[];
     styles: string[];
     colors: string[];
     features: string[];
+    context: OccasionPlanContext;
     summary: string;
-    extracted: { occasion: boolean; items: boolean; styles: boolean; colors: boolean; features: boolean };
+    extracted: { occasion: boolean; items: boolean; styles: boolean; colors: boolean; features: boolean; context: boolean };
     suggestedAdditionalItems: string[];
-}> => {
+};
+
+export const generateOccasionPlan = async (
+    userInput: string,
+    profile: UserProfile
+): Promise<OccasionPlanResult> => {
     // Build a compact vocabulary summary for the prompt
     const categories = fashionVocabularyDatabase.fashion_vocabulary_database.categories;
     const categoryNames = categories.map(c => c.name).join(', ');
     const styleLibrarySummary = fashionStyleLibrary.fashion_style_guide.styles
         .map(s => s.name).join(', ');
 
+    console.log(`[Occasion Planner] Planning for gender: ${profile.gender}, input: "${userInput}"`);
+
+    // --- CACHE CHECK ---
+    const normalizedInput = userInput.trim().toLowerCase().replace(/\s+/g, ' ');
+    const planCacheKey = `occasion_plan_${cacheManager.generateFastHash(
+        normalizedInput + '|' + (profile.gender || '') + '|' + (profile.estimatedSize || '')
+    )}`;
+    const cachedPlan = await cacheManager.checkCache(planCacheKey);
+    if (cachedPlan) {
+        console.log(`[Occasion Planner] Cache HIT for "${normalizedInput}" (${profile.gender})`);
+        return cachedPlan;
+    }
+    console.log(`[Occasion Planner] Cache MISS for "${normalizedInput}" (${profile.gender})`);
+
     const prompt = `
 You are a smart fashion planning assistant. A user typed a free-text request. Your job is to:
 1. **Extract** any specific criteria the user already mentioned (occasion, items, styles, colors, features).
-2. **Recommend** suitable values for any criteria the user did NOT mention.
-3. **Suggest additional items** the user might need for a complete outfit.
+2. **Extract contextual signals** — culture, role, season/weather, venue, formality, time of day, location, activity level, dress code, companions, body considerations, and any other relevant detail the user mentioned or strongly implied.
+3. **Recommend** suitable values for any criteria the user did NOT mention. Use the extracted context to make smarter recommendations (e.g., a Chinese wedding guest needs very different clothing than a Mexican beach wedding).
+4. **Suggest additional items** the user might need for a complete outfit.
 
 **User Input:** "${userInput}"
-**User Profile:** ${profile.gender || 'Not specified'}, Size ${profile.estimatedSize || 'Not specified'}
+**User Gender:** ${profile.gender || 'Not specified'} (IMPORTANT: all recommendations must be gender-appropriate for a ${profile.gender || 'Not specified'} person)
+**User Size:** ${profile.estimatedSize || 'Not specified'}
 
 **Available Clothing Categories:** ${categoryNames}
 **Available Style Vibes:** ${styleLibrarySummary}
 
-**Extraction Rules:**
+**STEP 1 — EXTRACT CONTEXT (do this FIRST before anything else):**
+Read the user's input carefully and extract ALL contextual signals. These are NOT separate questions to ask — infer them from what the user wrote. Only include fields where the user explicitly stated or strongly implied a value. Examples:
+- "Chinese wedding" → culture: "Chinese"
+- "I'm a bridesmaid" → role: "Bridesmaid"
+- "outdoor summer wedding" → season: "Summer", venue: "Outdoor", weather: "Warm"
+- "black tie gala in NYC" → formality: "Black Tie", location: "New York City"
+- "beach party at night" → venue: "Beach", timeOfDay: "Evening"
+- "going hiking then dinner" → activityLevel: "Active then seated"
+- "I'm 6 months pregnant" → bodyConsiderations: "Pregnant"
+- "girls night out" → companions: "Friends (girls' night)"
+- "cocktail dress code" → dressCode: "Cocktail"
+
+**STEP 2 — EXTRACTION RULES (standard fields):**
 - **occasion**: Infer the occasion from the user's input. Map casual phrases to standard occasions (e.g., "wedding in May" → "Wedding Guest", "job interview" → "Interview", "going out tonight" → "Night Out / Party"). If no occasion is mentioned, set to "" and extracted.occasion = false.
 - **items**: If the user mentions specific clothing (e.g., "dress", "pants", "shoes"), extract those as category names. Use exact category names from the available list. If user says "dress", map to "dresses". If user says "top" or "shirt", map to "tops". If no items mentioned, extracted.items = false.
 - **styles**: If the user mentions style/vibe words (e.g., "elegant", "casual", "bohemian"), extract them. If not mentioned, extracted.styles = false.
 - **colors**: If the user mentions colors (e.g., "red", "navy", "pastel"), extract them. If not mentioned, extracted.colors = false.
 - **features**: If the user mentions fabric, fit, or detail preferences (e.g., "silk", "fitted", "flowy"), extract them. If not mentioned, extracted.features = false.
 
-**Recommendation Rules (for non-extracted fields):**
-- For items: Recommend a complete outfit composition (3-5 items). If user mentioned "dress", also consider suggesting "footwear" and "handbags" to complete the look.
-- For styles: Suggest 2-3 style vibes that match the occasion and any mentioned items.
-- For colors: Suggest 3-5 appropriate colors/palettes.
-- For features: Suggest 2-4 relevant features/details.
+**STEP 3 — USE CONTEXT FOR SMARTER RECOMMENDATIONS:**
+When recommending styles, colors, features, and items for non-extracted fields, USE the extracted context heavily:
+- **Culture**: Chinese weddings → red/gold tones, qipao-inspired, avoid all-white/all-black. Indian weddings → rich jewel tones, embroidery, saree/lehenga consideration. Mexican weddings → vibrant colors, floral patterns.
+- **Role**: Bride → white/ivory, show-stopping silhouette. Bridesmaid → coordinate with wedding party. Guest → elegant but not upstaging. Host → polished and approachable.
+- **Season/Weather**: Summer → lightweight, breathable fabrics, lighter colors. Winter → layered, heavier fabrics, rich tones. Rainy → water-resistant, practical footwear.
+- **Venue**: Outdoor garden → flowy, nature-inspired. Rooftop/lounge → sleek, modern. Beach → casual, sand-friendly shoes. Office → structured, professional.
+- **Formality**: Black tie → floor-length, luxury fabrics. Semi-formal → cocktail length, refined. Casual → comfortable yet put-together.
+- **Time of Day**: Morning/brunch → lighter tones, relaxed. Evening → deeper tones, sparkle/shimmer acceptable.
+- **Activity Level**: Dancing → flexible, secure. Walking → comfortable footwear priority. Seated dinner → structured silhouette fine.
+- **Body Considerations**: Pregnant → empire waist, stretchy, supportive. Petite → elongating lines.
 
-**suggestedAdditionalItems Rules:**
+**STEP 4 — suggestedAdditionalItems Rules:**
 - ONLY populate this if the user EXPLICITLY mentioned specific clothing items (extracted.items = true) AND mentioned only 1-2 items. In that case, suggest complementary items to complete the look (e.g., user said "dress" → suggest ["footwear", "handbags"]).
 - If the user did NOT mention any specific items (extracted.items = false), you MUST set suggestedAdditionalItems to []. In this case, put the full recommended outfit in "items" instead — the user asked for a complete outfit, so recommend everything directly.
 - If the user already requested 3+ items, return [].
 
-**summary**: Write a one-sentence summary of the plan.
+**summary**: Write a one-sentence summary that incorporates the context (e.g., "For an outdoor summer Chinese wedding as a guest, a flowing red-accented dress with elegant sandals...").
 
 **Output (Strict JSON):**
 {
   "occasion": "Wedding Guest",
   "items": ["dresses", "footwear", "handbags"],
   "styles": ["Elegant", "Romantic"],
-  "colors": ["Pastels", "Blush Pink", "Soft Gold"],
-  "features": ["Flowy Fabric", "Elegant Draping"],
-  "summary": "For a wedding guest look, a flowing dress with elegant heels and a clutch creates the perfect ensemble.",
+  "colors": ["Red", "Gold", "Champagne"],
+  "features": ["Lightweight Fabric", "Elegant Draping"],
+  "context": {
+    "culture": "Chinese",
+    "role": "Guest",
+    "season": "Summer",
+    "weather": "Warm",
+    "venue": "Outdoor Garden",
+    "formality": "Semi-Formal",
+    "timeOfDay": "Afternoon",
+    "location": null,
+    "activityLevel": null,
+    "bodyConsiderations": null,
+    "companions": null,
+    "dressCode": null,
+    "ageGroup": null
+  },
+  "summary": "For an outdoor summer Chinese wedding as a guest, a flowing dress in red and gold tones with elegant heels and a coordinating clutch.",
   "extracted": {
     "occasion": true,
-    "items": true,
+    "items": false,
     "styles": false,
     "colors": false,
-    "features": false
+    "features": false,
+    "context": true
   },
-  "suggestedAdditionalItems": ["footwear", "handbags"]
+  "suggestedAdditionalItems": []
 }
+
+**IMPORTANT:** Only include context fields that the user mentioned or strongly implied. Set all others to null. If NO context was detected at all, set "context" to {} and extracted.context to false.
 `;
 
     try {
@@ -547,26 +617,44 @@ You are a smart fashion planning assistant. A user typed a free-text request. Yo
             'gemini-3-flash-preview',
             {
                 contents: { parts: [{ text: prompt }] },
-                config: { responseMimeType: 'application/json' }
+                config: { responseMimeType: 'application/json', temperature: 0 }
             }
         );
 
         const text = response.text || '{}';
         const parsed = JSON.parse(text);
 
-        return {
+        // Clean context: remove null/undefined values
+        const rawContext = parsed.context || {};
+        const cleanContext: OccasionPlanContext = {};
+        for (const [k, v] of Object.entries(rawContext)) {
+            if (v !== null && v !== undefined && v !== '') {
+                (cleanContext as any)[k] = v;
+            }
+        }
+
+        const result: OccasionPlanResult = {
             occasion: parsed.occasion || '',
             items: parsed.items || [],
             styles: parsed.styles || [],
             colors: parsed.colors || [],
             features: parsed.features || [],
+            context: cleanContext,
             summary: parsed.summary || '',
-            extracted: parsed.extracted || { occasion: false, items: false, styles: false, colors: false, features: false },
+            extracted: parsed.extracted || { occasion: false, items: false, styles: false, colors: false, features: false, context: false },
             suggestedAdditionalItems: parsed.suggestedAdditionalItems || [],
         };
+
+        console.log(`[Occasion Planner] Extracted context:`, cleanContext);
+
+        // Cache the result (2 hour TTL)
+        await cacheManager.setCache(planCacheKey, result, 7200);
+        console.log(`[Occasion Planner] Cached result for "${normalizedInput}" (${profile.gender})`);
+
+        return result;
     } catch (error) {
         console.error("Occasion Planner Error:", error);
-        return { occasion: '', items: [], styles: [], colors: [], features: [], summary: '', extracted: { occasion: false, items: false, styles: false, colors: false, features: false }, suggestedAdditionalItems: [] };
+        return { occasion: '', items: [], styles: [], colors: [], features: [], context: {}, summary: '', extracted: { occasion: false, items: false, styles: false, colors: false, features: false, context: false }, suggestedAdditionalItems: [] };
     }
 };
 
@@ -578,7 +666,8 @@ You are a smart fashion planning assistant. A user typed a free-text request. Yo
 export const generateStylistRecommendations = async (
     profile: UserProfile,
     preferences: Preferences,
-    styleAnalysis: StyleAnalysisResult
+    styleAnalysis: StyleAnalysisResult,
+    occasionContext?: OccasionPlanContext
 ): Promise<ProfessionalStylistResponse> => {
     try {
         const keptItems = profile.keptItems?.join(', ') || "No specific items identified";
@@ -587,8 +676,37 @@ export const generateStylistRecommendations = async (
         const detectedColors = styleAnalysis.detectedColors?.join(', ') || "Not detected";
         const keptItemDetails = styleAnalysis.detailDataset ? JSON.stringify(styleAnalysis.detailDataset) : "No structural details available";
 
+        // Build context string for prompt and cache
+        const contextStr = occasionContext && Object.keys(occasionContext).length > 0
+            ? Object.entries(occasionContext).filter(([_, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ')
+            : '';
+
+        // --- CACHE CHECK ---
+        const recCacheSignature = [
+            profile.gender || '',
+            profile.estimatedSize || '',
+            targetItems,
+            styleVibe,
+            detectedColors,
+            preferences.occasion || '',
+            preferences.priceRange || '',
+            preferences.colors || '',
+            keptItems,
+            contextStr,
+        ].join('|').toLowerCase().replace(/\s+/g, ' ');
+        const recCacheKey = `stylist_recs_${cacheManager.generateFastHash(recCacheSignature)}`;
+        const cachedRecs = await cacheManager.checkCache(recCacheKey);
+        if (cachedRecs) {
+            console.log(`[Stylist Agent] Cache HIT for recs (${profile.gender}, ${targetItems})`);
+            return cachedRecs;
+        }
+        console.log(`[Stylist Agent] Cache MISS — generating fresh recommendations`);
+
         // Inject the full style guide as system context
         const styleGuideJson = JSON.stringify(masterStyleGuide.master_style_guide, null, 2);
+
+        console.log(`[Stylist Agent] Generating recommendations for gender: ${profile.gender}`);
+        const genderLabel = profile.gender?.toLowerCase() === 'male' ? "men's" : profile.gender?.toLowerCase() === 'female' ? "women's" : (profile.gender || "unisex");
 
         const prompt = `
 **ROLE:** You are an elite Professional Stylist. You MUST follow the "Master Style Guide" below as your absolute source of truth.
@@ -596,8 +714,11 @@ export const generateStylistRecommendations = async (
 **MASTER STYLE GUIDE (Source of Truth):**
 ${styleGuideJson}
 
+**CRITICAL: GENDER CONTEXT**
+The user is **${profile.gender}**. ALL recommendations MUST be gender-appropriate for a **${profile.gender}** person. Every item name and serp_query MUST use the prefix "${genderLabel}" (e.g., "${genderLabel} navy silk blouse"). Do NOT recommend clothing intended for a different gender.
+
 **USER CONTEXT:**
-- Gender: ${profile.gender}
+- Gender: ${profile.gender} (IMPORTANT: all items must be ${genderLabel} clothing)
 - Size: ${profile.estimatedSize}
 ${profile.height ? `- Height: ${profile.height}` : ''}
 - Current Outfit (Kept Items): ${keptItems}
@@ -608,6 +729,16 @@ ${profile.height ? `- Height: ${profile.height}` : ''}
 - Occasion: ${preferences.occasion || 'General / Not specified'}
 - Budget: ${preferences.priceRange || 'Not specified'}
 ${preferences.colors ? `- Preferred Colors: ${preferences.colors}` : ''}
+${contextStr ? `
+**OCCASION CONTEXT (use this to fine-tune your recommendations):**
+${contextStr}
+These details significantly affect appropriate clothing choices. For example:
+- Cultural context affects acceptable colors/styles (e.g., avoid white at Chinese weddings, embrace red/gold)
+- Role affects how prominent the outfit should be (bride vs guest)
+- Season/weather affects fabric weight and coverage
+- Venue affects formality and practicality (e.g., no stilettos for beach)
+- Formality/dress code directly constrains outfit choices
+Apply ALL relevant context when selecting items, colors, fabrics, and silhouettes.` : ''}
 
 **YOUR TASK: Execute the 7-Step Recommendation Workflow**
 
@@ -625,7 +756,7 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
 - Create exactly **3 distinct outfit options** that the user can choose from.
 - Each outfit should have a different personality (e.g., one classic, one trendy, one bold).
 - **ONLY recommend items in the categories listed in "Looking For" above.** Do NOT add extra categories (e.g., if the user only wants "Bottom, Footwear", do NOT add outerwear, accessories, or handbags). Each outfit's recommendations array must ONLY contain items from the requested categories.
-- For each item in the outfit, generate a **serp_query** — this is a Google Shopping search string. It must include: gender + color + material + item type + key feature. Example: "women's cream silk wide-leg trousers high-waisted".
+- For each item in the outfit, generate a **serp_query** — this is a Google Shopping search string. It MUST start with "${genderLabel}" followed by color + material + item type + key feature. Example: "${genderLabel} cream silk wide-leg trousers high-waisted".
 - Each item's **style_reason** must cite a SPECIFIC rule from the guide (e.g., "60-30-10 Rule: charcoal is your 60% base", "Hard-Soft Rule: silk against your denim jacket").
 - The **logic** field must walk through the 7-step workflow and explain the reasoning.
 - If the user has kept items, those items should NOT appear in your recommendations (they already own them). Only recommend NEW items in the requested categories.
@@ -656,7 +787,7 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
             'gemini-3-pro-preview',
             {
                 contents: { parts: [{ text: prompt }] },
-                config: { responseMimeType: 'application/json' }
+                config: { responseMimeType: 'application/json', temperature: 0.2 }
             }
         );
 
@@ -672,10 +803,16 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
             };
         }
 
-        return {
+        const result = {
             outfits: parsed.outfits,
             refined_constraints: parsed.refined_constraints || ""
         };
+
+        // Cache the result (2 hour TTL)
+        await cacheManager.setCache(recCacheKey, result, 7200);
+        console.log(`[Stylist Agent] Cached recommendations (${profile.gender}, ${targetItems})`);
+
+        return result;
 
     } catch (e) {
         console.error("Professional Stylist Agent Failed:", e);
@@ -701,14 +838,19 @@ export const refineSingleOutfit = async (
         const styleGuideJson = JSON.stringify(masterStyleGuide.master_style_guide, null, 2);
         const baseOutfitJson = JSON.stringify(baseOutfit, null, 2);
 
+        const genderLabel = profile.gender?.toLowerCase() === 'male' ? "men's" : profile.gender?.toLowerCase() === 'female' ? "women's" : (profile.gender || "unisex");
+
         const prompt = `
 **ROLE:** You are an elite Professional Stylist refining a specific outfit based on the user's request.
 
 **MASTER STYLE GUIDE (Source of Truth):**
 ${styleGuideJson}
 
+**CRITICAL: GENDER CONTEXT**
+The user is **${profile.gender}**. ALL recommendations MUST be gender-appropriate for a **${profile.gender}** person. Every serp_query MUST use "${genderLabel}" prefix.
+
 **USER CONTEXT:**
-- Gender: ${profile.gender}
+- Gender: ${profile.gender} (all items must be ${genderLabel} clothing)
 - Size: ${profile.estimatedSize}
 ${profile.height ? `- Height: ${profile.height}` : ''}
 - Occasion: ${preferences.occasion || 'General / Not specified'}
@@ -729,7 +871,7 @@ Rules:
 - Keep the same outfit "name" style but you can slightly adjust it to reflect the change.
 - Update the "logic" field to explain what was changed and why.
 - Maintain the same number of items/categories.
-- Generate proper serp_query strings for any modified items (gender + color + material + item type + key feature).
+- Generate proper serp_query strings for any modified items (must include "${genderLabel}" + color + material + item type + key feature).
 
 **OUTPUT FORMAT (Strict JSON — single outfit object, NOT wrapped in an array):**
 {
