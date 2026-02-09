@@ -3444,7 +3444,7 @@ export default function App() {
       setShowUpdatedRecommendation(false);
       setPendingRefinedOutfit(null);
 
-      console.log(`[Card3 Confirm] Generating recommendations. Profile gender: ${profile.gender}`);
+      console.log(`[Card3 Confirm] Generating recommendations. Profile gender: ${profile.gender}, colors: [${card3Plan.colors.join(', ')}], features: [${card3Plan.features.join(', ')}], items: [${card3Plan.items.join(', ')}]`);
 
       // Add user confirmation message to chat
       const confirmMsg: RefinementChatMessage = {

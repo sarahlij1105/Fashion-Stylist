@@ -732,7 +732,7 @@ export const generateOccasionPlan = async (
 
     // --- CACHE CHECK ---
     const normalizedInput = userInput.trim().toLowerCase().replace(/\s+/g, ' ');
-    const planCacheKey = `occasion_plan_v3_${cacheManager.generateFastHash(
+    const planCacheKey = `occasion_plan_v4_${cacheManager.generateFastHash(
         normalizedInput + '|' + (profile.gender || '') + '|' + (profile.estimatedSize || '')
     )}`;
     const cachedPlan = await cacheManager.checkCache(planCacheKey);
@@ -791,9 +791,12 @@ When recommending styles, colors, features, and items for non-extracted fields, 
 - **Time/Activity-aware**: Evening → deeper tones, shimmer ok. Dancing → flexible. Walking → comfortable shoes.
 - **Body-aware**: Pregnant → empire waist, stretchy. Petite → elongating lines.
 
-**STEP 4 — EXCLUSIVE ITEM RULES:**
-- "dresses" and "tops"+"bottoms" are MUTUALLY EXCLUSIVE. If recommending a dress, do NOT also include tops or bottoms. If recommending tops+bottoms, do NOT also include dresses. Pick one approach per outfit.
-- If the user explicitly asked for a "dress", use dresses (not tops+bottoms). If the user asked for "top" or "bottom" or "skirt" or "pants", use tops+bottoms (not dresses).
+**STEP 4 — EXCLUSIVE ITEM RULES (CRITICAL — MUST FOLLOW):**
+- "dresses" and "tops"/"bottoms" are MUTUALLY EXCLUSIVE in the "items" array. NEVER include BOTH.
+  - If you choose a dress → items should contain "dresses" but NEVER "tops" or "bottoms"
+  - If you choose separates → items should contain "tops" and/or "bottoms" but NEVER "dresses"
+- If the user explicitly asked for a "dress", use "dresses". If the user asked for "top" or "bottom" or "skirt" or "pants", use separates.
+- If the user didn't specify, pick the more appropriate option for the occasion (e.g., date night → dresses is fine).
 
 **STEP 5 — suggestedAdditionalItems Rules:**
 - ONLY populate if the user EXPLICITLY mentioned 1-2 specific items (extracted.items = true). Suggest complementary items.
@@ -863,6 +866,35 @@ Even for fields the user didn't mention, YOU MUST recommend suitable values — 
             suggestedAdditionalItems: parsed.suggestedAdditionalItems || [],
         };
 
+        // --- Post-generation: enforce dress vs top+bottom mutual exclusion ---
+        const dressTerms = ['dresses', 'dress', 'gown'];
+        const topTerms = ['tops', 'top', 'shirt', 'blouse'];
+        const bottomTerms = ['bottoms', 'bottom', 'pants', 'skirt', 'jeans', 'shorts', 'trousers'];
+        const itemsLower = result.items.map(i => i.toLowerCase());
+        const hasDress = itemsLower.some(i => dressTerms.some(d => i.includes(d)));
+        const hasTop = itemsLower.some(i => topTerms.some(t => i.includes(t)));
+        const hasBottom = itemsLower.some(i => bottomTerms.some(b => i.includes(b)));
+
+        if (hasDress && (hasTop || hasBottom)) {
+            // Check if user explicitly asked for one or the other
+            const inputLower = userInput.toLowerCase();
+            const userWantsDress = dressTerms.some(d => inputLower.includes(d));
+            const userWantsTopBottom = topTerms.some(t => inputLower.includes(t)) || bottomTerms.some(b => inputLower.includes(b));
+
+            if (userWantsTopBottom && !userWantsDress) {
+                // Keep tops/bottoms, remove dresses
+                result.items = result.items.filter(i => !dressTerms.some(d => i.toLowerCase().includes(d)));
+                console.log(`[Occasion Planner] Removed "dresses" — user asked for separates`);
+            } else {
+                // Default: keep dresses, remove tops/bottoms
+                result.items = result.items.filter(i =>
+                    !topTerms.some(t => i.toLowerCase().includes(t)) &&
+                    !bottomTerms.some(b => i.toLowerCase().includes(b))
+                );
+                console.log(`[Occasion Planner] Removed "tops"/"bottoms" — keeping dresses`);
+            }
+        }
+
         // Safety check: if the model returned empty arrays, warn and DON'T cache
         // (so the next call retries with a fresh API call instead of serving blanks)
         const isEmpty = result.items.length === 0 && result.styles.length === 0 && result.colors.length === 0;
@@ -917,10 +949,11 @@ export const generateStylistRecommendations = async (
             preferences.occasion || '',
             preferences.priceRange || '',
             preferences.colors || '',
+            preferences.location || '',   // features/requirements
             keptItems,
             contextStr,
         ].join('|').toLowerCase().replace(/\s+/g, ' ');
-        const recCacheKey = `stylist_recs_v3_${cacheManager.generateFastHash(recCacheSignature)}`;
+        const recCacheKey = `stylist_recs_v4_${cacheManager.generateFastHash(recCacheSignature)}`;
         const cachedRecs = await cacheManager.checkCache(recCacheKey);
         if (cachedRecs) {
             console.log(`[Stylist Agent] Cache HIT for recs (${profile.gender}, ${targetItems})`);
@@ -948,10 +981,9 @@ export const generateStylistRecommendations = async (
 - Kept Item Details: ${keptItemDetails}
 - Looking For: ${targetItems} (ONLY recommend these categories)
 - Style Vibe: ${styleVibe}
-- Detected Palette: ${detectedColors}
 - Occasion: ${preferences.occasion || 'General / Not specified'}
 - Budget: ${preferences.priceRange || 'Not specified'}
-${preferences.colors ? `- Preferred Colors: ${preferences.colors}` : ''}
+${preferences.colors ? `- **COLOR PALETTE (MUST USE):** ${preferences.colors} — Every outfit MUST use colors from this palette. Incorporate ALL listed colors across the 3 outfits.` : `- Detected Palette: ${detectedColors}`}
 ${preferences.location ? `- Key Features/Requirements: ${preferences.location} (MUST incorporate these into item_name AND serp_query)` : ''}
 ${contextStr ? `**OCCASION CONTEXT:** ${contextStr}` : ''}
 
@@ -968,6 +1000,7 @@ Return strict JSON: { "outfits": [...], "refined_constraints": "" }`;
 
 Create exactly 3 distinct outfit options with different personalities (e.g., one classic, one trendy, one bold). ONLY recommend items in the requested categories — do NOT add extra categories.
 EXCLUSIVE RULE: "dresses" and "tops"+"bottoms" are mutually exclusive. If the requested categories include "dresses", do NOT recommend tops or bottoms. If they include "tops" or "bottoms", do NOT recommend dresses.
+COLOR RULE: You MUST use colors from the provided COLOR PALETTE. Every outfit should incorporate at least one color from the palette. Distribute ALL listed colors across the 3 outfits — ensure no color is ignored.
 For each item, generate a serp_query (Google Shopping search string) that includes ALL relevant details: color, material, feature keywords (e.g., "glittery", "floral", "silk"), and style. The serp_query is used directly for product search — it must be specific enough to find the right items. Each style_reason must cite a specific guide rule.
 IMPORTANT: If "Key Features/Requirements" are listed (e.g., "glittery", "lace", "silk"), every relevant item MUST incorporate those features in both item_name and serp_query.
 Output strict JSON with this exact structure:
