@@ -77,7 +77,6 @@ export enum FashionPurpose {
 
 export interface UserProfile {
   gender: string;
-  age?: string; // e.g. "25-30"
   height?: string; // e.g. "165 cm" or "5'6\""
   heightCategory?: string; // e.g. "Average", "Tall", "Petite"
   shoeSize?: string; // e.g. "US 7"

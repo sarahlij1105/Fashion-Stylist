@@ -80,17 +80,15 @@ export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<User
 
         **Your Tasks:**
         1. **Gender:** Detect the person's gender (Female / Male / Non-binary)
-        2. **Age Range:** Estimate an age range (e.g., "18-24", "25-30", "31-40", "41-50", "50+")
-        3. **Height Category:** Based on proportions, classify as: "Petite" (under 5'3" / 160cm), "Average" (5'3"-5'7" / 160-170cm), "Tall" (over 5'7" / 170cm)
-        4. **Estimated Height:** Give a specific estimate (e.g., "165 cm" or "5'5\"")
-        5. **Clothing Size:** Estimate standard clothing size: XS, S, M, L, XL, XXL
-        6. **Shoe Size:** Estimate shoe size based on height/proportions (e.g., "US 7", "US 9")
+        2. **Height Category:** Based on proportions, classify as: "Petite" (under 5'3" / 160cm), "Average" (5'3"-5'7" / 160-170cm), "Tall" (over 5'7" / 170cm)
+        3. **Estimated Height:** Give a specific estimate (e.g., "165 cm" or "5'5\"")
+        4. **Clothing Size:** Estimate standard clothing size: XS, S, M, L, XL, XXL
+        5. **Shoe Size:** Estimate shoe size based on height/proportions (e.g., "US 7", "US 9")
 
         **Output Schema (Strict JSON):**
         \`\`\`json
         {
           "gender": "Female" | "Male" | "Non-binary",
-          "age": "25-30",
           "heightCategory": "Average",
           "height": "165 cm",
           "estimatedSize": "M",
@@ -128,7 +126,6 @@ export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<User
 
         return {
             gender: parsed.gender || 'Female',
-            age: parsed.age || '',
             heightCategory: parsed.heightCategory || '',
             height: parsed.height || '',
             estimatedSize: parsed.estimatedSize || 'M',
@@ -473,14 +470,17 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
  * style direction, color palette, and other features using fashion vocabulary.
  */
 export const generateOccasionPlan = async (
-    occasion: string,
+    userInput: string,
     profile: UserProfile
 ): Promise<{
+    occasion: string;
     items: string[];
     styles: string[];
     colors: string[];
     features: string[];
     summary: string;
+    extracted: { occasion: boolean; items: boolean; styles: boolean; colors: boolean; features: boolean };
+    suggestedAdditionalItems: string[];
 }> => {
     // Build a compact vocabulary summary for the prompt
     const categories = fashionVocabularyDatabase.fashion_vocabulary_database.categories;
@@ -489,28 +489,50 @@ export const generateOccasionPlan = async (
         .map(s => s.name).join(', ');
 
     const prompt = `
-You are a fashion planning assistant. Based on the occasion below, recommend what a complete outfit should include.
+You are a smart fashion planning assistant. A user typed a free-text request. Your job is to:
+1. **Extract** any specific criteria the user already mentioned (occasion, items, styles, colors, features).
+2. **Recommend** suitable values for any criteria the user did NOT mention.
+3. **Suggest additional items** the user might need for a complete outfit.
 
-**Occasion:** "${occasion}"
-**User:** ${profile.gender || 'Not specified'}, Size ${profile.estimatedSize || 'Not specified'}${profile.age ? `, Age ${profile.age}` : ''}
+**User Input:** "${userInput}"
+**User Profile:** ${profile.gender || 'Not specified'}, Size ${profile.estimatedSize || 'Not specified'}
 
 **Available Clothing Categories:** ${categoryNames}
 **Available Style Vibes:** ${styleLibrarySummary}
 
-**Your Task:**
-1. **Items**: Recommend which clothing categories to include for this occasion. Pick from the available categories. Usually 3-5 items (e.g., a top + bottom + footwear, or a dress + footwear + handbag). Use the exact category names.
-2. **Styles**: Suggest 2-4 style vibes that suit this occasion. Use the exact style names from the list above when possible.
-3. **Colors**: Suggest 3-5 color palettes appropriate for this occasion (e.g., "Pastels", "Navy Blue", "Jewel Tones", "Earth Tones", "Neutrals").
-4. **Features**: Suggest 2-4 other notable features or fabric/detail keywords (e.g., "Flowy Fabric", "Structured Silhouette", "Statement Accessories", "Minimalist Hardware").
-5. **Summary**: Write a one-sentence summary like: For "Wedding Guest", we would recommend: An outfit consisting of Dress, Heels, Clutch.
+**Extraction Rules:**
+- **occasion**: Infer the occasion from the user's input. Map casual phrases to standard occasions (e.g., "wedding in May" → "Wedding Guest", "job interview" → "Interview", "going out tonight" → "Night Out / Party"). If no occasion is mentioned, set to "" and extracted.occasion = false.
+- **items**: If the user mentions specific clothing (e.g., "dress", "pants", "shoes"), extract those as category names. Use exact category names from the available list. If user says "dress", map to "dresses". If user says "top" or "shirt", map to "tops". If no items mentioned, extracted.items = false.
+- **styles**: If the user mentions style/vibe words (e.g., "elegant", "casual", "bohemian"), extract them. If not mentioned, extracted.styles = false.
+- **colors**: If the user mentions colors (e.g., "red", "navy", "pastel"), extract them. If not mentioned, extracted.colors = false.
+- **features**: If the user mentions fabric, fit, or detail preferences (e.g., "silk", "fitted", "flowy"), extract them. If not mentioned, extracted.features = false.
+
+**Recommendation Rules (for non-extracted fields):**
+- For items: Recommend a complete outfit composition (3-5 items). If user mentioned "dress", also consider suggesting "footwear" and "handbags" to complete the look.
+- For styles: Suggest 2-3 style vibes that match the occasion and any mentioned items.
+- For colors: Suggest 3-5 appropriate colors/palettes.
+- For features: Suggest 2-4 relevant features/details.
+
+**suggestedAdditionalItems**: If the user only mentioned 1-2 items, suggest other complementary items they might want (e.g., if user said "dress", suggest ["footwear", "handbags"] as additions). Use exact category names. If user already requested 3+ items or a full outfit, return [].
+
+**summary**: Write a one-sentence summary of the plan.
 
 **Output (Strict JSON):**
 {
-  "items": ["dress", "footwear", "handbags"],
-  "styles": ["Elegant", "Formal", "Romantic"],
-  "colors": ["Pastels", "Jewel Tones", "Neutrals"],
-  "features": ["Flowy Fabric", "Sophisticated Details", "Statement Accessories"],
-  "summary": "For a wedding guest look, a flowing dress with elegant heels and a clutch bag creates the perfect ensemble."
+  "occasion": "Wedding Guest",
+  "items": ["dresses", "footwear", "handbags"],
+  "styles": ["Elegant", "Romantic"],
+  "colors": ["Pastels", "Blush Pink", "Soft Gold"],
+  "features": ["Flowy Fabric", "Elegant Draping"],
+  "summary": "For a wedding guest look, a flowing dress with elegant heels and a clutch creates the perfect ensemble.",
+  "extracted": {
+    "occasion": true,
+    "items": true,
+    "styles": false,
+    "colors": false,
+    "features": false
+  },
+  "suggestedAdditionalItems": ["footwear", "handbags"]
 }
 `;
 
@@ -527,15 +549,18 @@ You are a fashion planning assistant. Based on the occasion below, recommend wha
         const parsed = JSON.parse(text);
 
         return {
+            occasion: parsed.occasion || '',
             items: parsed.items || [],
             styles: parsed.styles || [],
             colors: parsed.colors || [],
             features: parsed.features || [],
             summary: parsed.summary || '',
+            extracted: parsed.extracted || { occasion: false, items: false, styles: false, colors: false, features: false },
+            suggestedAdditionalItems: parsed.suggestedAdditionalItems || [],
         };
     } catch (error) {
         console.error("Occasion Planner Error:", error);
-        return { items: [], styles: [], colors: [], features: [], summary: '' };
+        return { occasion: '', items: [], styles: [], colors: [], features: [], summary: '', extracted: { occasion: false, items: false, styles: false, colors: false, features: false }, suggestedAdditionalItems: [] };
     }
 };
 
@@ -570,7 +595,6 @@ ${styleGuideJson}
 - Size: ${profile.estimatedSize}
 ${profile.height ? `- Height: ${profile.height}` : ''}
 ${profile.heightCategory ? `- Build: ${profile.heightCategory}` : ''}
-${profile.age ? `- Age: ${profile.age}` : ''}
 - Current Outfit (Kept Items): ${keptItems}
 - Kept Item Structural Details: ${keptItemDetails}
 - Looking For: ${targetItems}

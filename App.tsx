@@ -192,6 +192,7 @@ export default function App() {
   // Hoisted ref for chat container auto-scroll
   const chatContainerRef = React.useRef<HTMLDivElement>(null);
   const prevChatMessageCountRef = React.useRef<number>(0);
+  const heroImageRequestIdRef = React.useRef<number>(0); // Cancellation guard for background hero image gen
 
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
@@ -203,20 +204,9 @@ export default function App() {
   // --- NEW: Landing Page Logic ---
   const handleSmartEntry = async () => {
       if (!searchQuery.trim()) return;
-      setIsLoading(true);
-      try {
-          const extracted = await analyzeUserIntent(searchQuery);
-          setPreferences(prev => ({ ...prev, ...extracted }));
-          
-          // Determine next step based on extraction
-          // If items found, maybe skip to Dashboard? 
-          // For now, let's go to Dashboard directly as "Smart Start"
-          setStep(AppStep.PREFERENCES_DASHBOARD);
-      } catch (e) {
-          console.error(e);
-      } finally {
-          setIsLoading(false);
-      }
+      const userInput = searchQuery.trim();
+      setSearchQuery('');
+      handleCard3GoToChat(userInput);
   };
 
   // --- NEW: Refinement Logic ---
@@ -1108,44 +1098,105 @@ export default function App() {
       );
   };
 
-  const renderLanding = () => (
-    <div className="max-w-md mx-auto px-6 pt-12 animate-fade-in pb-32">
-       <h1 className="text-4xl font-bold font-serif text-stone-900 mb-2 text-center">Elite Stylist</h1>
-       <p className="text-stone-500 mb-8 text-center">Your AI personal shopper</p>
+  const renderLanding = () => {
+    const quickSearches = [
+        { label: 'Wedding Guest', icon: '💍' },
+        { label: 'Graduation', icon: '🎓' },
+        { label: 'Interview', icon: '💼' },
+        { label: 'Date Night', icon: '💕' },
+        { label: 'Work/Office', icon: '🏢' },
+        { label: 'Party/Event', icon: '🎉' },
+    ];
+
+    return (
+    <div className="max-w-md mx-auto px-6 pt-10 animate-fade-in pb-32">
+       {/* Hero Icon */}
+       <div className="flex justify-center mb-6">
+           <div className="w-14 h-14 rounded-full bg-rose-50 flex items-center justify-center">
+               <Sparkles size={24} className="text-rose-400" />
+           </div>
+       </div>
+
+       <h1 className="text-3xl font-bold font-serif text-stone-900 mb-1.5 text-center leading-tight">What are you looking for?</h1>
+       <p className="text-sm text-stone-400 mb-7 text-center">Let's create the perfect outfit for your special moment</p>
 
        {/* Search Box */}
-       <div className="relative mb-8">
+       <div className="relative mb-6">
            <input 
              type="text"
              value={searchQuery}
              onChange={(e) => setSearchQuery(e.target.value)}
-             placeholder="What are you looking for? (e.g. Wedding guest dress)"
-             className="w-full p-4 pr-12 bg-white border border-stone-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-stone-900 transition-all"
+             placeholder="e.g. find me an outfit for a date night on Valentin..."
+             className="w-full p-4 pr-14 bg-white border border-stone-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300 transition-all text-sm"
              onKeyDown={(e) => e.key === 'Enter' && handleSmartEntry()}
            />
            <button 
              onClick={handleSmartEntry}
-             className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition-colors"
+             disabled={!searchQuery.trim()}
+             className={`absolute right-3 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${
+                 searchQuery.trim()
+                     ? 'bg-rose-400 text-white hover:bg-rose-500 shadow-sm'
+                     : 'bg-stone-100 text-stone-300'
+             }`}
            >
-             <Search size={18} />
+             <Send size={18} />
            </button>
        </div>
 
-       <div className="grid grid-cols-1 gap-4">
-          {/* Card 1: Style Clone (New Flow) */}
+       {/* Quick Searches */}
+       <div className="mb-6">
+           <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-3">Quick Searches</p>
+           <div className="flex flex-wrap gap-2">
+               {quickSearches.map((qs) => (
+                   <button
+                       key={qs.label}
+                       onClick={() => {
+                           setSearchQuery(qs.label);
+                           handleCard3GoToChat(qs.label);
+                       }}
+                       className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 hover:border-stone-400 hover:shadow-sm transition-all"
+                   >
+                       <span className="text-sm">{qs.icon}</span> {qs.label}
+                   </button>
+               ))}
+           </div>
+       </div>
+
+       {/* Style Tip */}
+       <div className="bg-rose-50 rounded-2xl p-4 mb-8">
+           <div className="flex items-center gap-2 mb-1.5">
+               <Sparkles size={14} className="text-rose-400" />
+               <p className="text-xs font-bold text-rose-500">Style Tip</p>
+           </div>
+           <p className="text-xs text-stone-600 leading-relaxed">The more details you share about your occasion, the better we can tailor recommendations to match your needs!</p>
+       </div>
+
+       {/* Divider */}
+       <div className="relative mb-6">
+           <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-stone-200" /></div>
+           <div className="relative flex justify-center"><span className="bg-stone-50 px-4 text-xs text-stone-400">or if you already have an outfit/idea</span></div>
+       </div>
+
+       {/* Card 1 & Card 2 */}
+       <div className="grid grid-cols-2 gap-3">
+          {/* Card 1: Style Clone */}
           <button
              onClick={() => {
                  setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING})); 
-                 setStep(AppStep.CARD1_DETAILS); // New Entry Point
+                 setStylistOutfits([]);
+                 setSelectedOutfitIndex(null);
+                 setChatMessages([]);
+                 heroImageRequestIdRef.current++;
+                 setStep(AppStep.CARD1_DETAILS);
              }}
-             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
+             className="flex flex-col items-start gap-3 p-4 bg-white border border-stone-200 rounded-2xl hover:border-stone-400 hover:shadow-md transition-all text-left"
           >
-             <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center shrink-0">
-                 <Camera size={24} />
+             <div className="w-10 h-10 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center">
+                 <Sparkles size={18} />
              </div>
              <div>
-                 <h3 className="font-bold text-stone-900">Show me this style</h3>
-                 <p className="text-xs text-stone-500">Upload a photo to find similar items</p>
+                 <h3 className="font-bold text-sm text-stone-900 mb-0.5">Shop me this style</h3>
+                 <p className="text-[11px] text-stone-400 leading-snug">Upload outfit photos to find similar pieces</p>
              </div>
           </button>
 
@@ -1153,38 +1204,26 @@ export default function App() {
           <button
              onClick={() => {
                  setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING}));
+                 setStylistOutfits([]);
+                 setSelectedOutfitIndex(null);
+                 setChatMessages([]);
+                 heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD2_DETAILS);
              }}
-             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
+             className="flex flex-col items-start gap-3 p-4 bg-white border border-stone-200 rounded-2xl hover:border-stone-400 hover:shadow-md transition-all text-left"
           >
-             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center shrink-0">
-                 <Layers size={24} />
+             <div className="w-10 h-10 bg-stone-100 text-stone-500 rounded-xl flex items-center justify-center">
+                 <Layers size={18} />
              </div>
              <div>
-                 <h3 className="font-bold text-stone-900">Find items to match</h3>
-                 <p className="text-xs text-stone-500">Complete an outfit you already own</p>
-             </div>
-          </button>
-
-          {/* Card 3: Create Outfit (Manual) */}
-          <button
-             onClick={() => {
-                 setPreferences(p => ({...p, purpose: FashionPurpose.NEW_OUTFIT}));
-                 setStep(AppStep.CARD3_OCCASION);
-             }}
-             className="flex items-center gap-4 p-5 bg-white border border-stone-200 rounded-2xl hover:border-stone-900 hover:shadow-md transition-all text-left"
-          >
-             <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center shrink-0">
-                 <Sparkles size={24} />
-             </div>
-             <div>
-                 <h3 className="font-bold text-stone-900">Create complete outfit</h3>
-                 <p className="text-xs text-stone-500">Start from scratch with guided steps</p>
+                 <h3 className="font-bold text-sm text-stone-900 mb-0.5">Find items to match</h3>
+                 <p className="text-[11px] text-stone-400 leading-snug">Upload your outfit to discover matching pieces</p>
              </div>
           </button>
        </div>
     </div>
-  );
+    );
+  };
 
   const renderPreferencesDashboard = () => (
       <div className="max-w-md mx-auto px-6 pt-4 animate-fade-in pb-32">
@@ -2067,9 +2106,12 @@ export default function App() {
               setStylistOutfits(response.outfits);
               setSelectedOutfitIndex(0);
 
-              // Fire hero image generation in background (non-blocking)
+              // Fire hero image generation in background (non-blocking, with cancellation guard)
+              const requestId = ++heroImageRequestIdRef.current;
               generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
-                  setStylistOutfits(outfitsWithImages);
+                  if (heroImageRequestIdRef.current === requestId) {
+                      setStylistOutfits(outfitsWithImages);
+                  }
               });
               
               // Build chat messages
@@ -2575,8 +2617,8 @@ export default function App() {
 
   // --- CARD 3 FLOW ---
 
-  const handleCard3GoToChat = async (occasion: string) => {
-      setPreferences(prev => ({ ...prev, occasion }));
+  const handleCard3GoToChat = async (userInput: string) => {
+      setPreferences(prev => ({ ...prev, purpose: FashionPurpose.NEW_OUTFIT }));
       setStep(AppStep.CARD3_CHAT);
       setIsLoading(true);
       setChatMessages([]);
@@ -2586,10 +2628,18 @@ export default function App() {
       setSelectedOutfitIndex(null);
       setStyleAnalysisResults(null);
       setIsGeneratingRecs(false);
+      heroImageRequestIdRef.current++;
+
+      // Show user's original message in the chat
+      const userMsg: RefinementChatMessage = { role: 'user', content: userInput };
+      setChatMessages([userMsg]);
 
       try {
-          const plan = await generateOccasionPlan(occasion, profile);
+          const plan = await generateOccasionPlan(userInput, profile);
           setCard3Plan(plan);
+          if (plan.occasion) {
+              setPreferences(prev => ({ ...prev, occasion: plan.occasion }));
+          }
 
           // Set selectedItemTypes from the plan
           const itemToDisplay: Record<string, string> = {
@@ -2601,23 +2651,48 @@ export default function App() {
           const detectedItems = plan.items.map(i => itemToDisplay[i] || i).filter(Boolean);
           setSelectedItemTypes(detectedItems);
 
-          // Build chat messages
+          // Build chat messages — show analysis card
           const analysisMsg: RefinementChatMessage = {
               role: 'system',
-              content: JSON.stringify({ type: 'card3_plan', ...plan, occasion }),
+              content: JSON.stringify({ type: 'card3_plan', ...plan }),
           };
+
+          // Build smart welcome message highlighting extracted vs. recommended
+          const ext = plan.extracted;
+          let welcomeText = '';
+          
+          // Mention what was understood from user input
+          const understood: string[] = [];
+          if (ext.occasion && plan.occasion) understood.push(`**${plan.occasion}** as your occasion`);
+          if (ext.items && plan.items.length > 0) understood.push(`**${plan.items.join(', ')}** as items you're looking for`);
+          if (ext.styles && plan.styles.length > 0) understood.push(`**${plan.styles.join(', ')}** style`);
+          if (ext.colors && plan.colors.length > 0) understood.push(`**${plan.colors.join(', ')}** colors`);
+          
+          if (understood.length > 0) {
+              welcomeText += `Got it! I understood ${understood.join(', ')} from your request. `;
+          }
+          welcomeText += `I've put together a recommended plan above.`;
+
+          // Ask about additional items if the agent suggested some
+          if (plan.suggestedAdditionalItems.length > 0) {
+              const additionalNames = plan.suggestedAdditionalItems.map(i => itemToDisplay[i] || i).filter(Boolean);
+              welcomeText += `\n\nTo complete your look, would you also like me to find **${additionalNames.join(' and ')}**? Just say yes or tell me what else you need!`;
+          } else {
+              welcomeText += `\n\nFeel free to adjust anything — tell me if you'd like to change styles, colors, or items. Once you're happy, hit **Generate Outfit Options**!`;
+          }
+
           const welcomeMsg: RefinementChatMessage = {
               role: 'assistant',
-              content: `Please confirm or tell us more about your preferences/restrictions to proceed with further outfit construction.`,
+              content: welcomeText,
           };
-          setChatMessages([analysisMsg, welcomeMsg]);
+          setChatMessages([userMsg, analysisMsg, welcomeMsg]);
       } catch (err) {
           console.error('Occasion plan error:', err);
           const errMsg: RefinementChatMessage = {
               role: 'assistant',
               content: `I couldn't generate a plan. Please tell me more about what you're looking for.`,
           };
-          setChatMessages([errMsg]);
+          setChatMessages([userMsg, errMsg]);
       } finally {
           setIsLoading(false);
       }
@@ -2648,9 +2723,12 @@ export default function App() {
           setStylistOutfits(response.outfits);
           setSelectedOutfitIndex(0);
 
-          // Fire hero image generation in background (non-blocking)
+          // Fire hero image generation in background (non-blocking, with cancellation guard)
+          const requestId = ++heroImageRequestIdRef.current;
           generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
-              setStylistOutfits(outfitsWithImages);
+              if (heroImageRequestIdRef.current === requestId) {
+                  setStylistOutfits(outfitsWithImages);
+              }
           });
       } catch (e) {
           console.error("Card 3 Stylist Failed", e);
@@ -2836,11 +2914,11 @@ export default function App() {
               {/* Header */}
               <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.CARD3_OCCASION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
+                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
                           <ChevronLeft size={20} className="text-stone-600" />
                       </button>
                       <div className="text-center">
-                          <h1 className="text-sm font-bold text-stone-900">New Outfit</h1>
+                          <h1 className="text-sm font-bold text-stone-900">Style Assistant</h1>
                           <p className="text-[10px] text-stone-400">AI Recommendations</p>
                       </div>
                       <div className="w-8" />
@@ -2865,20 +2943,35 @@ export default function App() {
                   )}
 
                   {/* Plan Analysis Card */}
-                  {planData && (
+                  {planData && (() => {
+                      const ext = planData.extracted || {};
+                      const TagLabel = ({ extracted }: { extracted: boolean }) => (
+                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ml-2 ${
+                              extracted ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-50 text-amber-500'
+                          }`}>
+                              {extracted ? 'From you' : 'Suggested'}
+                          </span>
+                      );
+                      return (
                       <div className="flex justify-start">
                           <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
                               <div className="flex items-center gap-2 mb-2">
                                   <Sparkles size={16} className="text-emerald-600" />
-                                  <span className="text-sm font-bold text-emerald-700">Based on your occasion</span>
+                                  <span className="text-sm font-bold text-emerald-700">Your Outfit Plan</span>
                               </div>
-                              <p className="text-sm text-stone-700 mb-4">
-                                  For "<strong>{planData.occasion}</strong>", we would recommend:
-                              </p>
+                              {planData.occasion && (
+                                  <p className="text-sm text-stone-700 mb-4">
+                                      Occasion: <strong>{planData.occasion}</strong>
+                                      <TagLabel extracted={!!ext.occasion} />
+                                  </p>
+                              )}
 
                               {planData.items?.length > 0 && (
                                   <div className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Outfit Items</p>
+                                      <div className="flex items-center mb-2">
+                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Outfit Items</p>
+                                          <TagLabel extracted={!!ext.items} />
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                           {planData.items.map((item: string, i: number) => (
                                               <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
@@ -2891,7 +2984,10 @@ export default function App() {
 
                               {planData.styles?.length > 0 && (
                                   <div className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
+                                      <div className="flex items-center mb-2">
+                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Style</p>
+                                          <TagLabel extracted={!!ext.styles} />
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                           {planData.styles.map((s: string, i: number) => (
                                               <span key={i} className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full text-xs font-bold text-amber-700">
@@ -2904,7 +3000,10 @@ export default function App() {
 
                               {planData.colors?.length > 0 && (
                                   <div className="mb-4">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
+                                      <div className="flex items-center mb-2">
+                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Color Palette</p>
+                                          <TagLabel extracted={!!ext.colors} />
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                           {planData.colors.map((c: string, i: number) => (
                                               <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
@@ -2917,7 +3016,10 @@ export default function App() {
 
                               {planData.features?.length > 0 && (
                                   <div className="mb-3">
-                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Key Features</p>
+                                      <div className="flex items-center mb-2">
+                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Key Features</p>
+                                          <TagLabel extracted={!!ext.features} />
+                                      </div>
                                       <div className="flex flex-wrap gap-2">
                                           {planData.features.map((f: string, i: number) => (
                                               <span key={i} className="px-3 py-1.5 bg-stone-100 border border-stone-200 rounded-full text-xs font-medium text-stone-600">
@@ -2927,11 +3029,10 @@ export default function App() {
                                       </div>
                                   </div>
                               )}
-
-                              <p className="text-sm text-stone-600 mt-3">Please confirm or tell us more about your preferences/restrictions to proceed with further outfit construction.</p>
                           </div>
                       </div>
-                  )}
+                      );
+                  })()}
 
                   {/* Chat messages (skip system) */}
                   {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
@@ -3512,21 +3613,6 @@ export default function App() {
                               <option value="Non-binary">Non-binary</option>
                           </select>
                       </div>
-                      <div>
-                          <label className="text-xs font-medium text-stone-500 mb-1 block">Age Range</label>
-                          <select 
-                              value={profile.age || ''}
-                              onChange={(e) => setProfile(p => ({...p, age: e.target.value}))}
-                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
-                          >
-                              <option value="">Select</option>
-                              <option value="18-24">18-24</option>
-                              <option value="25-30">25-30</option>
-                              <option value="31-40">31-40</option>
-                              <option value="41-50">41-50</option>
-                              <option value="50+">50+</option>
-                          </select>
-                      </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -3607,7 +3693,6 @@ export default function App() {
   const renderProfileView = () => {
       const fields = [
           { label: 'Gender', value: profile.gender, key: 'gender', icon: <User size={16} /> },
-          { label: 'Age Range', value: profile.age || 'Not set', key: 'age', icon: <User size={16} /> },
           { label: 'Height', value: profile.height || 'Not set', key: 'height', icon: <Ruler size={16} /> },
           { label: 'Height Category', value: profile.heightCategory || 'Not set', key: 'heightCategory', icon: <Ruler size={16} /> },
           { label: 'Clothing Size', value: profile.estimatedSize, key: 'estimatedSize', icon: <Layers size={16} /> },
