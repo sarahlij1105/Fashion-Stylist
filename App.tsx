@@ -3,7 +3,7 @@ import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAn
 import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage, searchSpecificCategories, OccasionPlanContext } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { refinePreferences } from './services/agent_router';
-import { Camera, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, Home, User, Ruler, Footprints, Save, Send, ShoppingBag, Clock, Heart, FileText } from 'lucide-react';
+import { Camera, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, Home, User, Ruler, Footprints, Save, Send, ShoppingBag, Clock, Heart, FileText, DollarSign } from 'lucide-react';
 
 // --- USER STYLE DNA (MVP): Persistent preference learning via localStorage ---
 // Accumulates user preferences across sessions so agents can prioritize past favorites.
@@ -286,6 +286,8 @@ export default function App() {
   const [searchProgress, setSearchProgress] = useState<{ completed: string[]; total: number }>({ completed: [], total: 0 }); // Progressive search: tracks completed categories
   const [showUpdatedRecommendation, setShowUpdatedRecommendation] = useState(false); // floating button to view refined recommendation
   const [pendingRefinedOutfit, setPendingRefinedOutfit] = useState<StylistOutfit | null>(null); // the refined outfit waiting to be inserted into chat
+  const [showBudgetPrompt, setShowBudgetPrompt] = useState(false); // ask user for budget before procurement
+  const [budgetInput, setBudgetInput] = useState({ min: '', max: '' }); // temp budget input values
   // Tracks specific values the user explicitly requested/changed during chat refinement
   // e.g. { colors: ["Pink"], styles: ["Bohemian"], items: ["footwear"], features: ["Silk"] }
   const [userModifiedValues, setUserModifiedValues] = useState<{ colors: string[]; styles: string[]; items: string[]; features: string[] }>({ colors: [], styles: [], items: [], features: [] });
@@ -2708,10 +2710,50 @@ export default function App() {
                   keptItems: currentKeptItems, // What user is keeping/wearing
               };
               const response = await generateStylistRecommendations(profileWithKept, stylistPrefs, styleResult);
+
+              // --- Card 2 specific: strip recommendations to ONLY the searched categories ---
+              // The user is searching for specific items (e.g., "Outerwear") to match their existing outfit.
+              // The stylist may still sneak in extra categories. Force-filter to only searched items.
+              const searchedLower = new Set(searchingFor.map(s => s.toLowerCase().trim()));
+              const card2CategoryAliases: Record<string, string[]> = {
+                  'outerwear': ['outerwear', 'jacket', 'coat', 'blazer', 'cardigan', 'parka', 'windbreaker'],
+                  'top': ['top', 'tops', 'shirt', 'blouse', 'camisole', 'sweater', 'tee', 'tank'],
+                  'bottom': ['bottom', 'bottoms', 'pants', 'skirt', 'jeans', 'shorts', 'trousers', 'leggings'],
+                  'dress': ['dress', 'dresses', 'gown'],
+                  'footwear': ['footwear', 'shoes', 'boots', 'heels', 'sneakers', 'sandals', 'flats', 'loafers'],
+                  'handbags': ['handbag', 'handbags', 'bag', 'purse', 'clutch', 'tote'],
+                  'jewelry': ['jewelry', 'jewelries', 'necklace', 'bracelet', 'earrings', 'ring'],
+                  'hair accessories': ['hair accessories', 'hair_accessories', 'headband', 'hat', 'scarf'],
+              };
+              const isSearchedCategory = (category: string) => {
+                  const catLower = category.toLowerCase().trim();
+                  if (searchedLower.has(catLower)) return true;
+                  for (const searched of searchedLower) {
+                      for (const [group, aliases] of Object.entries(card2CategoryAliases)) {
+                          if ((aliases.includes(searched) || searched === group) &&
+                              (aliases.includes(catLower) || catLower === group)) {
+                              return true;
+                          }
+                      }
+                  }
+                  return false;
+              };
+              for (const outfit of response.outfits) {
+                  if (outfit.recommendations) {
+                      const before = outfit.recommendations.length;
+                      outfit.recommendations = outfit.recommendations.filter(r => isSearchedCategory(r.category));
+                      if (outfit.recommendations.length < before) {
+                          console.log(`[Card2] Stripped ${before - outfit.recommendations.length} extra items from "${outfit.name}" — only keeping: ${searchingFor.join(', ')}`);
+                      }
+                  }
+              }
+
               setStylistOutfits(response.outfits);
               setSelectedOutfitIndex(0);
 
               // Fire hero image generation in background (non-blocking, with cancellation guard)
+              // Since recommendations are already filtered to only searched items,
+              // the hero image will only show those items (e.g., just a coat)
               const requestId = ++heroImageRequestIdRef.current;
               generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
                   if (heroImageRequestIdRef.current === requestId) {
@@ -2962,6 +3004,32 @@ export default function App() {
               setIsGeneratingRecs(true);
               try {
                   const refinedOutfit = await refineSingleOutfit(baseOutfit, msg, profile, preferences, buildDecisionSummary());
+
+                  // Card 2: filter refined outfit to only searched categories
+                  if (selectedItemTypes.length > 0 && refinedOutfit.recommendations) {
+                      const searchedLower2 = new Set<string>(selectedItemTypes.map(s => s.toLowerCase().trim()));
+                      const card2Aliases: Record<string, string[]> = {
+                          'outerwear': ['outerwear', 'jacket', 'coat', 'blazer', 'cardigan'],
+                          'top': ['top', 'tops', 'shirt', 'blouse', 'sweater'],
+                          'bottom': ['bottom', 'bottoms', 'pants', 'skirt', 'jeans', 'shorts'],
+                          'dress': ['dress', 'dresses', 'gown'],
+                          'footwear': ['footwear', 'shoes', 'boots', 'heels', 'sneakers', 'sandals'],
+                          'handbags': ['handbag', 'handbags', 'bag', 'purse', 'clutch'],
+                          'jewelry': ['jewelry', 'jewelries', 'necklace', 'bracelet', 'earrings'],
+                          'hair accessories': ['hair accessories', 'headband', 'hat', 'scarf'],
+                      };
+                      refinedOutfit.recommendations = refinedOutfit.recommendations.filter(r => {
+                          const catLower = r.category.toLowerCase().trim();
+                          if (searchedLower2.has(catLower)) return true;
+                          for (const searched of searchedLower2) {
+                              for (const [group, aliases] of Object.entries(card2Aliases)) {
+                                  if ((aliases.includes(searched) || searched === group) &&
+                                      (aliases.includes(catLower) || catLower === group)) return true;
+                              }
+                          }
+                          return false;
+                      });
+                  }
 
                   // Replace just that outfit in the array
                   setStylistOutfits(prev => prev.map((o, i) => i === selectedOutfitIndex ? refinedOutfit : o));
@@ -3475,6 +3543,12 @@ export default function App() {
   const handleCard3Search = async () => {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
 
+      // If no budget has been set, prompt the user first
+      if (!preferences.priceRange) {
+          setShowBudgetPrompt(true);
+          return;
+      }
+
       const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
       // --- SEARCH CACHE CHECK ---
@@ -3543,6 +3617,35 @@ export default function App() {
           predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
           setStep(AppStep.CARD3_CHAT);
       }
+  };
+
+  // Handle budget confirmation from the prompt → set budget, close prompt, then start search
+  const handleBudgetConfirm = () => {
+      let priceRange = '';
+      const min = budgetInput.min.trim();
+      const max = budgetInput.max.trim();
+      if (min && max) priceRange = `$${min} - $${max}`;
+      else if (min) priceRange = `From $${min}`;
+      else if (max) priceRange = `Under $${max}`;
+      else priceRange = 'No budget constraint';
+
+      setPreferences(prev => ({ ...prev, priceRange }));
+      setShowBudgetPrompt(false);
+      setBudgetInput({ min: '', max: '' });
+
+      // Add a chat message confirming the budget
+      const budgetMsg: RefinementChatMessage = {
+          role: 'user',
+          content: priceRange === 'No budget constraint'
+              ? "No specific budget — find me the best options!"
+              : `My budget is ${priceRange}`,
+      };
+      setChatMessages(prev => [...prev, budgetMsg]);
+
+      // Trigger search after state update (use setTimeout to ensure state is committed)
+      setTimeout(() => {
+          handleCard3Search();
+      }, 50);
   };
 
   // Card 3 chat refinement handler
@@ -4448,8 +4551,63 @@ export default function App() {
                       </button>
                   )}
 
+                  {/* Budget prompt — shown when user clicks search without a budget */}
+                  {showBudgetPrompt && (
+                      <div className="mt-3 bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-xl px-4 py-3.5 shadow-sm">
+                          <div className="flex items-center gap-1.5 mb-2">
+                              <DollarSign size={14} className="text-[#C67B88]" />
+                              <span className="text-xs font-bold text-[#C67B88]">What's your budget?</span>
+                          </div>
+                          <p className="text-[10px] text-stone-500 mb-2.5">Set a price range so we can find the best items within your budget.</p>
+                          <div className="flex items-center gap-2 mb-3">
+                              <div className="flex-1">
+                                  <label className="text-[9px] font-bold text-stone-400 uppercase mb-0.5 block">Min ($)</label>
+                                  <input
+                                      type="number"
+                                      placeholder="0"
+                                      value={budgetInput.min}
+                                      onChange={e => setBudgetInput(prev => ({ ...prev, min: e.target.value }))}
+                                      className="w-full px-2.5 py-2 border-2 border-rose-200/50 rounded-lg text-xs outline-none focus:border-[#C67B88]/50 bg-white"
+                                  />
+                              </div>
+                              <span className="text-stone-300 mt-4">—</span>
+                              <div className="flex-1">
+                                  <label className="text-[9px] font-bold text-stone-400 uppercase mb-0.5 block">Max ($)</label>
+                                  <input
+                                      type="number"
+                                      placeholder="500"
+                                      value={budgetInput.max}
+                                      onChange={e => setBudgetInput(prev => ({ ...prev, max: e.target.value }))}
+                                      className="w-full px-2.5 py-2 border-2 border-rose-200/50 rounded-lg text-xs outline-none focus:border-[#C67B88]/50 bg-white"
+                                  />
+                              </div>
+                          </div>
+                          <div className="flex gap-2">
+                              <button
+                                  onClick={handleBudgetConfirm}
+                                  className="flex-1 py-2 rounded-lg font-bold text-xs bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-sm hover:shadow-md transition-all"
+                              >
+                                  Set Budget & Search
+                              </button>
+                              <button
+                                  onClick={() => {
+                                      setPreferences(prev => ({ ...prev, priceRange: 'No budget constraint' }));
+                                      setShowBudgetPrompt(false);
+                                      setBudgetInput({ min: '', max: '' });
+                                      const skipMsg: RefinementChatMessage = { role: 'user', content: "No specific budget — find me the best options!" };
+                                      setChatMessages(prev => [...prev, skipMsg]);
+                                      setTimeout(() => handleCard3Search(), 50);
+                                  }}
+                                  className="px-3 py-2 rounded-lg font-bold text-xs border border-rose-200 text-stone-500 hover:bg-rose-50 transition-all"
+                              >
+                                  Skip
+                              </button>
+                          </div>
+                      </div>
+                  )}
+
                   {/* Search button — only enabled when user has liked an outfit */}
-                  {stylistOutfits.length > 0 && (
+                  {stylistOutfits.length > 0 && !showBudgetPrompt && (
                       <button
                           onClick={handleCard3Search}
                           disabled={likedOutfitIndex === null}
