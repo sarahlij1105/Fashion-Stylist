@@ -345,12 +345,12 @@ ${JSON.stringify(currentCriteria, null, 2)}
 - Size: ${profile.estimatedSize}
 ${profile.height ? `- Height: ${profile.height}` : ''}
 ${memorySummary}${outfitContextBlock}
-**CONVERSATION HISTORY:**
-${chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}
+**CONVERSATION HISTORY (recent):**
+${chatHistory.slice(-8).filter(m => m.role === 'user' || m.role === 'assistant').slice(-6).map(m => `${m.role}: ${m.content.length > 300 ? m.content.slice(0, 300) + '...' : m.content}`).join('\n')}
 
 **USER'S NEW MESSAGE:** "${userMessage}"
 
-Return strict JSON with assistantMessage first.`;
+Return strict JSON with assistantMessage first. You MUST include all changed fields in updatedCriteria — especially "colors" if the user changed colors.`;
 
         let text = '';
 
@@ -397,6 +397,7 @@ Return strict JSON with assistantMessage first.`;
         }
 
         const parsed = JSON.parse(text || '{}');
+        console.log('[Chat Refinement] Model returned updatedCriteria:', JSON.stringify(parsed.updatedCriteria));
 
         // Post-process: ensure itemCategories are resolved from vocabulary
         if (parsed.updatedCriteria?.includedItems) {

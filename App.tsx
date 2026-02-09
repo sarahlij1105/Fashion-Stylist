@@ -3631,6 +3631,23 @@ export default function App() {
           });
 
           // Update plan AND selectedItemTypes if criteria changed
+          console.log('[Card3 Chat] runChatRefinement returned updatedCriteria:', JSON.stringify(updatedCriteria));
+
+          // Safety net: if the model returned empty updatedCriteria but the user clearly
+          // requested a color change, extract colors from the user's message directly.
+          if ((!updatedCriteria || Object.keys(updatedCriteria).length === 0)) {
+              const colorChangeMatch = msg.match(/\b(?:change|want|make|switch|use)\b.*?\b(?:color|colour)s?\b.*?\b(?:to|be)\b\s+(.+)/i)
+                  || msg.match(/\b(?:color|colour)s?\b.*?\b(?:to|be|should)\b\s+(.+)/i)
+                  || msg.match(/\b(?:change|switch|make)\b.*?\bto\b\s+(\w+(?:\s+and\s+\w+)*)\s*$/i);
+              if (colorChangeMatch) {
+                  const extracted = colorChangeMatch[1].replace(/[.!?]+$/, '').split(/\s+(?:and|,|&)\s+/i).map(c => c.trim()).filter(Boolean);
+                  if (extracted.length > 0) {
+                      console.log('[Card3 Chat] Safety net: extracted colors from user message:', extracted);
+                      updatedCriteria.colors = extracted.map(c => c.charAt(0).toUpperCase() + c.slice(1).toLowerCase());
+                  }
+              }
+          }
+
           const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
           if (criteriaChanged) {
               // Normalize colors: agent might return a string instead of array
