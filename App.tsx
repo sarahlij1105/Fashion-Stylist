@@ -192,6 +192,7 @@ export default function App() {
   const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; context?: OccasionPlanContext; summary: string } | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [showReviewStyleCard, setShowReviewStyleCard] = useState(false); // floating button to review updated style card
+  const [searchProgress, setSearchProgress] = useState<{ completed: string[]; total: number }>({ completed: [], total: 0 }); // Progressive search: tracks completed categories
   const [showUpdatedRecommendation, setShowUpdatedRecommendation] = useState(false); // floating button to view refined recommendation
   const [pendingRefinedOutfit, setPendingRefinedOutfit] = useState<StylistOutfit | null>(null); // the refined outfit waiting to be inserted into chat
   // Tracks specific values the user explicitly requested/changed during chat refinement
@@ -204,12 +205,110 @@ export default function App() {
   const heroImageRequestIdRef = React.useRef<number>(0); // Cancellation guard for background hero image gen
   const prevGenderRef = React.useRef<string>(DefaultProfile.gender); // Track previous gender for stale-data clearing
 
+  // --- PREDICTIVE QUERY GENERATION ---
+  // When the user likes an outfit, we start generating SerpApi queries + running procurement
+  // in the background so results are ready instantly when they click "Find Items".
+  const predictiveSearchRef = React.useRef<{
+      outfitKey: string;
+      promise: Promise<any> | null;
+      result: any;
+  }>({ outfitKey: '', promise: null, result: null });
+
   // Hoisted from renderCard1Profile (hooks must be at top level)
   const [useManualSize, setUseManualSize] = useState(false);
 
   // Hoisted from renderUploadPhoto (hooks must be at top level)
   const [heightFeet, setHeightFeet] = useState('');
   const [heightInches, setHeightInches] = useState('');
+
+  // --- LIGHTWEIGHT MEMORY SUMMARY ---
+  // Builds a compact text string (~200 bytes) summarizing all user decisions so far.
+  // Passed to each agent as additional context for better coherence without a full shared memory system.
+  const buildDecisionSummary = (): string => {
+      const parts: string[] = [];
+      if (userModifiedValues.colors.length > 0) parts.push(`User wants colors: ${userModifiedValues.colors.join(', ')}`);
+      if (userModifiedValues.styles.length > 0) parts.push(`User wants styles: ${userModifiedValues.styles.join(', ')}`);
+      if (userModifiedValues.items.length > 0) parts.push(`User changed items: ${userModifiedValues.items.join(', ')}`);
+      if (userModifiedValues.features.length > 0) parts.push(`User wants features: ${userModifiedValues.features.join(', ')}`);
+      if (likedOutfitIndex !== null && stylistOutfits[likedOutfitIndex]) {
+          parts.push(`User liked: Option ${String.fromCharCode(65 + likedOutfitIndex)} ("${stylistOutfits[likedOutfitIndex].name}")`);
+      }
+      // Include the last 2-3 user requests from chat for context
+      const recentUserMsgs = chatMessages
+          .filter(m => m.role === 'user')
+          .slice(-3)
+          .map(m => m.content.substring(0, 80));
+      if (recentUserMsgs.length > 0) parts.push(`Recent requests: ${recentUserMsgs.join(' | ')}`);
+      return parts.length > 0 ? parts.join('. ') + '.' : '';
+  };
+
+  // --- SEARCH RESULTS CACHE ---
+  // Stores the fingerprint + result of the last procurement search for each flow.
+  // If the user navigates back and clicks search again without changing criteria,
+  // the cached results are reused instantly instead of re-running the entire pipeline.
+  // Multi-entry search results cache: keyed by fingerprint so results from different
+  // flows (Card 1, Card 2, Card 3) persist independently. If the user goes back and
+  // clicks search again without changing criteria, the cached results are returned instantly.
+  const searchResultsCacheRef = React.useRef<{
+      fingerprint: string;
+      messages: any[];
+      entries: Record<string, any[]>; // fingerprint → messages
+  }>({ fingerprint: '', messages: [], entries: {} });
+
+  /** Build a deterministic fingerprint from the current search-relevant state. */
+  const buildSearchFingerprint = (outfitOrCriteria: any): string => {
+      try {
+          return JSON.stringify(outfitOrCriteria);
+      } catch {
+          return '';
+      }
+  };
+
+  // --- PREDICTIVE SEARCH: trigger background query gen + procurement ---
+  const triggerPredictiveSearch = (outfit: StylistOutfit) => {
+      if (!outfit || !outfit.recommendations?.length) return;
+
+      // Build a key from serp_query strings to detect if outfit content has changed
+      const outfitKey = JSON.stringify(outfit.recommendations.map(r => `${r.category}:${r.item_name}:${r.color_role}:${r.serp_query}`));
+
+      // Skip if we're already searching for this exact outfit
+      if (predictiveSearchRef.current.outfitKey === outfitKey && predictiveSearchRef.current.promise) return;
+
+      // Invalidate previous result and start new background search
+      predictiveSearchRef.current = { outfitKey, promise: null, result: null };
+
+      console.log('>> Predictive search: starting background query generation...');
+
+      const searchPromise = (async () => {
+          const searchQueries = await generateSearchQueries(outfit, profile, preferences);
+          const result = await searchWithStylistQueries(profile, preferences, searchQueries);
+          predictiveSearchRef.current.result = result;
+          console.log('>> Predictive search: results ready!');
+          return result;
+      })();
+
+      predictiveSearchRef.current.promise = searchPromise;
+
+      // Don't await — runs in background. Silently clear on error so handleSearch falls back to fresh.
+      searchPromise.catch(err => {
+          console.error('Predictive search failed (will retry on Find Items):', err);
+          if (predictiveSearchRef.current.outfitKey === outfitKey) {
+              predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
+          }
+      });
+  };
+
+  // Unified like handler — triggers predictive search on like, clears on un-like
+  const handleLikeOutfit = (idx: number) => {
+      const newIdx = likedOutfitIndex === idx ? null : idx;
+      setLikedOutfitIndex(newIdx);
+      if (newIdx !== null && stylistOutfits[newIdx]) {
+          triggerPredictiveSearch(stylistOutfits[newIdx]);
+      } else {
+          // Un-liked or toggled off — invalidate predictive cache
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
+      }
+  };
 
   // --- NEW: Landing Page Logic ---
   const handleSmartEntry = async () => {
@@ -390,6 +489,8 @@ export default function App() {
           setShowUpdatedRecommendation(false);
           setPendingRefinedOutfit(null);
           heroImageRequestIdRef.current++;
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
+          searchResultsCacheRef.current = { fingerprint: '', messages: [], entries: {} };
           prevGenderRef.current = profile.gender;
       }
   }, [profile.gender]);
@@ -407,6 +508,7 @@ export default function App() {
           setShowUpdatedRecommendation(false);
           setPendingRefinedOutfit(null);
           heroImageRequestIdRef.current++;
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
       }
   }, [step]);
 
@@ -509,8 +611,20 @@ export default function App() {
   };
 
   const handleSearch = async (customPrompt?: string) => {
+    // --- SEARCH CACHE CHECK ---
+    const fp = buildSearchFingerprint({ flow: 'standard', customPrompt, prefs: preferences, gender: profile.gender });
+    const cachedMsgs = searchResultsCacheRef.current.entries[fp];
+    if (!customPrompt && cachedMsgs && cachedMsgs.length > 0) {
+        console.log('>> Standard Search: cache HIT — reusing previous results');
+        prevStepBeforeResultsRef.current = step;
+        setMessages(cachedMsgs);
+        setStep(AppStep.RESULTS);
+        return;
+    }
+
     archiveCurrentSearch();
     prevStepBeforeResultsRef.current = step;
+    setSearchProgress({ completed: [], total: 0 });
     setStep(AppStep.SEARCHING);
     setIsLoading(true);
 
@@ -522,7 +636,11 @@ export default function App() {
         content: result.reflectionNotes,
         data: result
       };
-      setMessages(prev => [...prev, newMsg]);
+      const newMessages = [newMsg];
+      setMessages(newMessages);
+      searchResultsCacheRef.current.entries[fp] = newMessages;
+      searchResultsCacheRef.current.fingerprint = fp;
+      searchResultsCacheRef.current.messages = newMessages;
       setStep(AppStep.RESULTS);
     } catch (e) {
       console.error(e);
@@ -792,12 +910,39 @@ export default function App() {
       setIsChatLoading(true);
 
       try {
+          // --- STREAMING: Insert placeholder and update in real-time ---
+          const streamPlaceholder: RefinementChatMessage = { role: 'assistant', content: '▍' };
+          setChatMessages(prev => [...prev, streamPlaceholder]);
+
           const { updatedCriteria, assistantMessage } = await runChatRefinement(
               searchCriteria,
               chatMessages,
               msg,
-              profile
+              profile,
+              undefined,
+              // Streaming callback
+              (partialText) => {
+                  setChatMessages(prev => {
+                      const updated = [...prev];
+                      const lastIdx = updated.length - 1;
+                      if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                          updated[lastIdx] = { ...updated[lastIdx], content: partialText + '▍' };
+                      }
+                      return updated;
+                  });
+              },
+              buildDecisionSummary()
           );
+
+          // Finalize the streamed message
+          setChatMessages(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                  updated[lastIdx] = { ...updated[lastIdx], content: assistantMessage, criteriaSnapshot: updatedCriteria };
+              }
+              return updated;
+          });
 
           // Merge updated criteria into current criteria
           setSearchCriteria(prev => {
@@ -812,14 +957,6 @@ export default function App() {
               if (updatedCriteria.additionalNotes !== undefined) merged.additionalNotes = updatedCriteria.additionalNotes;
               return merged;
           });
-
-          // Add assistant response with criteria snapshot
-          const assistantMsg: RefinementChatMessage = {
-              role: 'assistant',
-              content: assistantMessage,
-              criteriaSnapshot: updatedCriteria,
-          };
-          setChatMessages(prev => [...prev, assistantMsg]);
       } catch (e) {
           console.error("Chat error:", e);
           const errMsg: RefinementChatMessage = {
@@ -835,8 +972,20 @@ export default function App() {
   // Fire search from chat with criteria-aware category mapping
   // Supports OR logic for same-category items and dress vs top+bottom exclusivity
   const handleCard1SearchFromChat = async () => {
+      // --- SEARCH CACHE CHECK: skip the full pipeline if criteria haven't changed ---
+      const fp = buildSearchFingerprint({ flow: 'card1chat', criteria: searchCriteria, items: searchCriteria.itemCategories, gender: profile.gender });
+      const cachedCard1 = searchResultsCacheRef.current.entries[fp];
+      if (cachedCard1 && cachedCard1.length > 0) {
+          console.log('>> Card 1 Search: cache HIT — reusing previous results');
+          prevStepBeforeResultsRef.current = step;
+          setMessages(cachedCard1);
+          setStep(AppStep.RESULTS);
+          return;
+      }
+
       archiveCurrentSearch();
       prevStepBeforeResultsRef.current = step;
+      setSearchProgress({ completed: [], total: 0 });
       setStep(AppStep.SEARCHING);
       setIsLoading(true);
 
@@ -889,8 +1038,10 @@ export default function App() {
           const searchQueries = await generateSearchQueries(syntheticOutfit, profile, chatPreferences);
           console.log(">> Search queries:", searchQueries);
 
-          // Step 2: Run the search pipeline
-          const result = await searchWithStylistQueries(profile, chatPreferences, searchQueries);
+          // Step 2: Run the search pipeline with progressive callback
+          const result = await searchWithStylistQueries(profile, chatPreferences, searchQueries, (category, _items, completedCount, totalCount) => {
+              setSearchProgress(prev => ({ completed: [...prev.completed, category], total: totalCount }));
+          });
 
           // Step 3: If exclusive paths exist, add budget breakdown info
           if (hasExclusivePaths && result.recommendations.length > 0) {
@@ -927,7 +1078,12 @@ export default function App() {
               content: result.reflectionNotes,
               data: result
           };
-          setMessages(prev => [...prev, newMsg]);
+          const newMessages = [newMsg];
+          setMessages(newMessages);
+          // Cache the results keyed by the search fingerprint
+          searchResultsCacheRef.current.entries[fp] = newMessages;
+          searchResultsCacheRef.current.fingerprint = fp;
+          searchResultsCacheRef.current.messages = newMessages;
           setStep(AppStep.RESULTS);
       } catch (e) {
           console.error(e);
@@ -939,6 +1095,17 @@ export default function App() {
   };
 
   const handleCard1Search = async () => {
+    // --- SEARCH CACHE CHECK ---
+    const fp = buildSearchFingerprint({ flow: 'card1legacy', prefs: preferences, gender: profile.gender, analysis: styleAnalysisResults?.detectedComponents });
+    const cachedLegacy = searchResultsCacheRef.current.entries[fp];
+    if (cachedLegacy && cachedLegacy.length > 0) {
+        console.log('>> Card 1 Legacy Search: cache HIT — reusing previous results');
+        prevStepBeforeResultsRef.current = step;
+        setMessages(cachedLegacy);
+        setStep(AppStep.RESULTS);
+        return;
+    }
+
     archiveCurrentSearch();
     prevStepBeforeResultsRef.current = step;
     setStep(AppStep.SEARCHING);
@@ -952,7 +1119,11 @@ export default function App() {
         content: result.reflectionNotes,
         data: result
       };
-      setMessages(prev => [...prev, newMsg]);
+      const newMessages = [newMsg];
+      setMessages(newMessages);
+      searchResultsCacheRef.current.entries[fp] = newMessages;
+      searchResultsCacheRef.current.fingerprint = fp;
+      searchResultsCacheRef.current.messages = newMessages;
       setStep(AppStep.RESULTS);
     } catch (e) {
       console.error(e);
@@ -1105,7 +1276,7 @@ export default function App() {
                               <Sparkles size={12} className="text-[#C67B88]" />
                           </span>
                           <div>
-                              <h1 className="text-sm font-bold text-stone-900">Fashion Assistant</h1>
+                              <h1 className="text-sm font-bold text-stone-900">Muse — Your Personal Stylist</h1>
                               <p className="text-[10px] text-[#8B6F7D]">Let me know if you need any changes</p>
                           </div>
                       </div>
@@ -1288,8 +1459,8 @@ export default function App() {
                       );
                   })}
                   
-                  {/* Typing indicator */}
-                  {isChatLoading && (
+                  {/* Typing indicator — hidden when streaming is active */}
+                  {isChatLoading && !chatMessages.some(m => m.content.includes('▍')) && (
                       <div className="flex justify-start">
                           <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
                               <div className="flex gap-1.5">
@@ -1353,7 +1524,7 @@ export default function App() {
                       }`}
                   >
                       <Search size={16} />
-                      Find My Style ({searchCriteria.includedItems.length} item{searchCriteria.includedItems.length !== 1 ? 's' : ''})
+                      Shop for This Style
                   </button>
               </div>
     </div>
@@ -1370,7 +1541,7 @@ export default function App() {
     ];
 
     return (
-    <div className="max-w-md mx-auto px-5 pt-14 animate-fade-in pb-28 bg-[#FFFBF8] min-h-full">
+    <div className="max-w-md mx-auto px-5 animate-fade-in bg-[#FFFBF8] min-h-full flex flex-col justify-center py-10">
        {/* Hero Icon */}
        <div className="flex justify-center mb-3">
            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pink-100 to-rose-100 border border-rose-200/50 flex items-center justify-center shadow-sm">
@@ -2267,30 +2438,68 @@ export default function App() {
   const handleCard2Search = async () => {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
       
-      archiveCurrentSearch();
-      prevStepBeforeResultsRef.current = step;
-      setStep(AppStep.SEARCHING);
-      
       const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
-      try {
-          // Step 1: Gemini Pro generates optimized SerpApi search queries
-          console.log(">> Generating search queries with Gemini Pro...");
-          const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
-          console.log(">> Search queries:", searchQueries);
+      // --- SEARCH CACHE CHECK ---
+      const fp = buildSearchFingerprint({ flow: 'card2', outfit: selectedOutfit.recommendations.map(r => `${r.category}:${r.item_name}:${r.color_role}:${r.serp_query}`), gender: profile.gender });
+      const cachedCard2 = searchResultsCacheRef.current.entries[fp];
+      if (cachedCard2 && cachedCard2.length > 0) {
+          console.log('>> Card 2 Search: cache HIT — reusing previous results');
+          prevStepBeforeResultsRef.current = step;
+          setMessages(cachedCard2);
+          setStep(AppStep.RESULTS);
+          return;
+      }
 
-          // Step 2: Run simplified pipeline (procurement + verification + top 3)
-          const result = await searchWithStylistQueries(profile, preferences, searchQueries);
+      archiveCurrentSearch();
+      prevStepBeforeResultsRef.current = step;
+      setSearchProgress({ completed: [], total: 0 });
+      setStep(AppStep.SEARCHING);
+
+      const onCategoryDone = (category: string, _items: any[], completedCount: number, totalCount: number) => {
+          setSearchProgress(prev => ({
+              completed: [...prev.completed, category],
+              total: totalCount,
+          }));
+      };
+
+      try {
+          let result: any;
+
+          // --- PREDICTIVE SEARCH: check if background results are ready ---
+          const outfitKey = JSON.stringify(selectedOutfit.recommendations.map(r => `${r.category}:${r.item_name}:${r.color_role}:${r.serp_query}`));
+          const cached = predictiveSearchRef.current;
+
+          if (cached.outfitKey === outfitKey && cached.result) {
+              console.log('>> Using predictive search results (instant!)');
+              result = cached.result;
+          } else if (cached.outfitKey === outfitKey && cached.promise) {
+              console.log('>> Awaiting in-flight predictive search...');
+              result = await cached.promise;
+          } else {
+              console.log('>> No predictive cache hit. Generating search queries with Gemini Pro...');
+              const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
+              console.log('>> Search queries:', searchQueries);
+              result = await searchWithStylistQueries(profile, preferences, searchQueries, onCategoryDone);
+          }
+
+          // Clear predictive cache after consumption
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
           
           const newMsg: ChatMessage = {
             role: 'model',
             content: result.reflectionNotes,
             data: result
           };
-          setMessages(prev => [...prev, newMsg]);
+          const newMessages = [newMsg];
+          setMessages(newMessages);
+          searchResultsCacheRef.current.entries[fp] = newMessages;
+          searchResultsCacheRef.current.fingerprint = fp;
+          searchResultsCacheRef.current.messages = newMessages;
           setStep(AppStep.RESULTS);
       } catch (error) {
           console.error("Card 2 Search Failed", error);
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
           setStep(AppStep.CARD2_RECOMMENDATION);
       }
   };
@@ -2573,13 +2782,39 @@ export default function App() {
       setIsChatLoading(true);
 
       try {
-          // Use the chat refinement agent to adjust the selected outfit
+          // --- STREAMING: Insert a placeholder and update it in real-time ---
+          const streamPlaceholder: RefinementChatMessage = { role: 'assistant', content: '▍' };
+          setChatMessages(prev => [...prev, streamPlaceholder]);
+
           const { updatedCriteria, assistantMessage } = await runChatRefinement(
               searchCriteria,
               chatMessages,
               msg,
-              profile
+              profile,
+              undefined,
+              // Streaming callback
+              (partialText) => {
+                  setChatMessages(prev => {
+                      const updated = [...prev];
+                      const lastIdx = updated.length - 1;
+                      if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                          updated[lastIdx] = { ...updated[lastIdx], content: partialText + '▍' };
+                      }
+                      return updated;
+                  });
+              },
+              buildDecisionSummary()
           );
+
+          // Finalize the streamed message
+          setChatMessages(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                  updated[lastIdx] = { ...updated[lastIdx], content: assistantMessage, criteriaSnapshot: updatedCriteria };
+              }
+              return updated;
+          });
 
           // Merge updated criteria
           if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
@@ -2593,13 +2828,6 @@ export default function App() {
               }));
           }
 
-          const assistantMsg: RefinementChatMessage = {
-              role: 'assistant',
-              content: assistantMessage,
-              criteriaSnapshot: updatedCriteria,
-          };
-          setChatMessages(prev => [...prev, assistantMsg]);
-
           // If outfits already exist, refine only the selected outfit
           const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
           if (criteriaChanged && stylistOutfits.length > 0 && selectedOutfitIndex !== null) {
@@ -2607,10 +2835,32 @@ export default function App() {
               const optionLabel = String.fromCharCode(65 + selectedOutfitIndex);
               setIsGeneratingRecs(true);
               try {
-                  const refinedOutfit = await refineSingleOutfit(baseOutfit, msg, profile, preferences);
+                  const refinedOutfit = await refineSingleOutfit(baseOutfit, msg, profile, preferences, buildDecisionSummary());
 
                   // Replace just that outfit in the array
                   setStylistOutfits(prev => prev.map((o, i) => i === selectedOutfitIndex ? refinedOutfit : o));
+
+                  // --- BACKWARDS SYNC: Outfit changes → Search Criteria (Card 2) ---
+                  // Merge any new colors from the refined outfit back into searchCriteria
+                  const outfitColors2 = refinedOutfit.recommendations
+                      .map(r => r.color_role)
+                      .filter(Boolean)
+                      .flatMap(c => c!.split(/[,/&]/).map(s => s.trim()))
+                      .filter(c => c.length > 0 && c.toLowerCase() !== 'any');
+                  if (outfitColors2.length > 0) {
+                      setSearchCriteria(prev => {
+                          const existingLower = new Set(prev.colors.map(c => c.toLowerCase()));
+                          const newColors = outfitColors2.filter(c => !existingLower.has(c.toLowerCase()));
+                          return newColors.length > 0
+                              ? { ...prev, colors: [...prev.colors, ...newColors] }
+                              : prev;
+                      });
+                  }
+
+                  // Re-trigger predictive search with the refined outfit
+                  if (likedOutfitIndex === selectedOutfitIndex) {
+                      triggerPredictiveSearch(refinedOutfit);
+                  }
 
                   // Generate hero image for the refined outfit in background
                   const requestId = ++heroImageRequestIdRef.current;
@@ -2671,7 +2921,7 @@ export default function App() {
                               <Sparkles size={12} className="text-[#C67B88]" />
                           </span>
                 <div>
-                              <h1 className="text-sm font-bold text-stone-900">Fashion Stylist</h1>
+                              <h1 className="text-sm font-bold text-stone-900">Muse — Your Personal Stylist</h1>
                               <p className="text-[10px] text-[#8B6F7D]">Review styling recommendations</p>
                           </div>
                       </div>
@@ -2836,7 +3086,7 @@ export default function App() {
                                       <ChevronLeft size={18} />
                                   </button>
                                   <button
-                                      onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
+                                      onClick={() => handleLikeOutfit(selectedOutfitIndex!)}
                                       className={`px-5 py-2 rounded-full font-bold text-xs flex items-center gap-1.5 transition-all ${
                                           isLiked
                                               ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
@@ -2865,8 +3115,8 @@ export default function App() {
                       );
                   })()}
 
-                  {/* Typing indicator */}
-                  {isChatLoading && (
+                  {/* Typing indicator — hidden when streaming is active */}
+                  {isChatLoading && !chatMessages.some(m => m.content.includes('▍')) && (
                       <div className="flex justify-start">
                           <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
                               <div className="flex gap-1.5">
@@ -2917,7 +3167,7 @@ export default function App() {
                       >
                           <Search size={16} />
                           {likedOutfitIndex !== null
-                              ? `Find Items for Option ${String.fromCharCode(65 + likedOutfitIndex)}`
+                              ? `Shop for This Style`
                               : 'Like an outfit to find items'}
                       </button>
                   )}
@@ -3076,29 +3326,72 @@ export default function App() {
   const handleCard3Search = async () => {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
 
-      archiveCurrentSearch();
-      prevStepBeforeResultsRef.current = step;
-      setStep(AppStep.SEARCHING);
       const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
-      try {
-          // Step 1: Gemini Pro generates optimized SerpApi search queries
-          console.log(">> Generating search queries with Gemini Pro...");
-          const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
-          console.log(">> Search queries:", searchQueries);
+      // --- SEARCH CACHE CHECK ---
+      const fp = buildSearchFingerprint({ flow: 'card3', outfit: selectedOutfit.recommendations.map(r => `${r.category}:${r.item_name}:${r.color_role}:${r.serp_query}`), gender: profile.gender });
+      const cachedCard3 = searchResultsCacheRef.current.entries[fp];
+      if (cachedCard3 && cachedCard3.length > 0) {
+          console.log('>> Card 3 Search: cache HIT — reusing previous results');
+          prevStepBeforeResultsRef.current = step;
+          setMessages(cachedCard3);
+          setStep(AppStep.RESULTS);
+          return;
+      }
 
-          // Step 2: Run simplified pipeline (procurement + verification + top 3)
-          const result = await searchWithStylistQueries(profile, preferences, searchQueries);
+      archiveCurrentSearch();
+      prevStepBeforeResultsRef.current = step;
+      setSearchProgress({ completed: [], total: 0 });
+      setStep(AppStep.SEARCHING);
+
+      // Progressive search callback — update UI as each category completes
+      const onCategoryDone = (category: string, _items: any[], completedCount: number, totalCount: number) => {
+          setSearchProgress(prev => ({
+              completed: [...prev.completed, category],
+              total: totalCount,
+          }));
+      };
+
+      try {
+          let result: any;
+
+          // --- PREDICTIVE SEARCH: check if background results are ready ---
+          const outfitKey = JSON.stringify(selectedOutfit.recommendations.map(r => `${r.category}:${r.item_name}:${r.color_role}:${r.serp_query}`));
+          const cached = predictiveSearchRef.current;
+
+          if (cached.outfitKey === outfitKey && cached.result) {
+              // Results are already ready — instant!
+              console.log('>> Using predictive search results (instant!)');
+              result = cached.result;
+          } else if (cached.outfitKey === outfitKey && cached.promise) {
+              // Still loading — await the in-flight background promise
+              console.log('>> Awaiting in-flight predictive search...');
+              result = await cached.promise;
+          } else {
+              // No matching predictive search — run fresh with progressive callback
+              console.log('>> No predictive cache hit. Generating search queries with Gemini Pro...');
+              const searchQueries = await generateSearchQueries(selectedOutfit, profile, preferences);
+              console.log('>> Search queries:', searchQueries);
+              result = await searchWithStylistQueries(profile, preferences, searchQueries, onCategoryDone);
+          }
+
+          // Clear predictive cache after consumption
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
 
           const newMsg: ChatMessage = {
               role: 'model',
               content: result.reflectionNotes,
               data: result
           };
-          setMessages(prev => [...prev, newMsg]);
+          const newMessages = [newMsg];
+          setMessages(newMessages);
+          searchResultsCacheRef.current.entries[fp] = newMessages;
+          searchResultsCacheRef.current.fingerprint = fp;
+          searchResultsCacheRef.current.messages = newMessages;
           setStep(AppStep.RESULTS);
       } catch (error) {
           console.error("Card 3 Search Failed", error);
+          predictiveSearchRef.current = { outfitKey: '', promise: null, result: null };
           setStep(AppStep.CARD3_CHAT);
       }
   };
@@ -3126,15 +3419,71 @@ export default function App() {
               additionalNotes: card3Plan?.features.join(', ') || '',
           };
 
+          // Pass outfit context if outfits have been generated so the agent
+          // understands references like "I don't want the olive top"
+          const outfitCtx = stylistOutfits.length > 0
+              ? { likedIndex: likedOutfitIndex ?? 0, outfits: stylistOutfits }
+              : undefined;
+
+          // --- PARALLEL EXECUTION: Start outfit refinement ALONGSIDE chat refinement ---
+          // Both agents only need the raw user message + current state. By running them in
+          // parallel, we save 2-4 seconds (the full refineSingleOutfit latency) on every
+          // chat message when outfits exist.
+          const looksLikeOutfitFeedback = /\b(want|like|change|swap|replace|remove|don't|no |make|prefer|different|instead|floral|color|style)\b/i.test(msg);
+          const shouldRefineOutfit = stylistOutfits.length > 0 && looksLikeOutfitFeedback;
+          const targetIdx = likedOutfitIndex ?? 0;
+
+          // Fire outfit refinement optimistically in the background if message looks like feedback
+          let outfitRefinementPromise: Promise<StylistOutfit> | null = null;
+          if (shouldRefineOutfit && stylistOutfits[targetIdx]) {
+              setIsGeneratingRecs(true);
+              const preRefinePrefs = {
+                  ...preferences,
+                  itemType: (card3Plan?.items || []).join(', '),
+                  stylePreference: (card3Plan?.styles || []).join(', '),
+                  colors: (card3Plan?.colors || []).join(', '),
+                  location: (card3Plan?.features || []).join(', '),
+              };
+              outfitRefinementPromise = refineSingleOutfit(stylistOutfits[targetIdx], msg, profile, preRefinePrefs, buildDecisionSummary());
+          }
+
+          // --- STREAMING: Insert a placeholder assistant message and update it in real-time ---
+          const streamPlaceholder: RefinementChatMessage = { role: 'assistant', content: '▍' }; // blinking cursor
+          setChatMessages(prev => [...prev, streamPlaceholder]);
+
           const { updatedCriteria, assistantMessage } = await runChatRefinement(
               currentCriteria,
               chatMessages,
               msg,
-              profile
+              profile,
+              outfitCtx,
+              // Streaming callback: update the last assistant message with partial text
+              (partialText) => {
+                  setChatMessages(prev => {
+                      const updated = [...prev];
+                      const lastIdx = updated.length - 1;
+                      if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                          updated[lastIdx] = { ...updated[lastIdx], content: partialText + '▍' };
+                      }
+                      return updated;
+                  });
+              },
+              buildDecisionSummary()
           );
 
+          // Finalize: replace the streaming placeholder with the complete message
+          setChatMessages(prev => {
+              const updated = [...prev];
+              const lastIdx = updated.length - 1;
+              if (lastIdx >= 0 && updated[lastIdx].role === 'assistant') {
+                  updated[lastIdx] = { ...updated[lastIdx], content: assistantMessage, criteriaSnapshot: updatedCriteria };
+              }
+              return updated;
+          });
+
           // Update plan AND selectedItemTypes if criteria changed
-          if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
+          const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
+          if (criteriaChanged) {
               setCard3Plan(prev => {
                   if (!prev) return prev;
                   const newStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles;
@@ -3156,10 +3505,6 @@ export default function App() {
                   }));
 
                   const updatedPlan = { ...prev, styles: newStyles, colors: newColors, items: newItems, features: newFeatures };
-
-                  // DO NOT mutate existing style card messages — keep originals frozen for comparison.
-                  // The "Review Style Card" button will insert a new message with the latest plan.
-
                   return updatedPlan;
               });
 
@@ -3184,42 +3529,36 @@ export default function App() {
               }
           }
 
-          const assistantMsg: RefinementChatMessage = {
-              role: 'assistant',
-              content: assistantMessage,
-              criteriaSnapshot: updatedCriteria,
-          };
-          setChatMessages(prev => [...prev, assistantMsg]);
-
-          // Show floating "Review Style Card" button if criteria changed and outfits not yet generated
-          const criteriaChanged = updatedCriteria && Object.keys(updatedCriteria).length > 0;
-          if (criteriaChanged && stylistOutfits.length === 0) {
+          // Show floating "Review Style Card" button whenever criteria changed
+          if (criteriaChanged) {
               setShowReviewStyleCard(true);
           }
-          // After outfits exist: refine ONLY the liked outfit (or first if none liked)
-          // Don't update live cards — store as pending and show "View Updated Recommendation" button
-          if (criteriaChanged && stylistOutfits.length > 0) {
-              const targetIdx = likedOutfitIndex ?? 0;
-              const baseOutfit = stylistOutfits[targetIdx];
-              setIsGeneratingRecs(true);
-              try {
-                  // Build preferences reflecting the latest criteria including features
-                  const latestItems = updatedCriteria.includedItems || card3Plan?.items || [];
-                  const latestStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : (card3Plan?.styles || []);
-                  const latestColors = updatedCriteria.colors || card3Plan?.colors || [];
-                  const latestFeatures = updatedCriteria.additionalNotes
-                      ? updatedCriteria.additionalNotes.split(', ')
-                      : (card3Plan?.features || []);
-                  const regenPrefs = {
-                      ...preferences,
-                      itemType: latestItems.join(', '),
-                      stylePreference: latestStyles.join(', '),
-                      colors: latestColors.join(', '),
-                      location: latestFeatures.join(', '), // Pass features via location field for prompt access
-                  };
 
-                  // Refine only the liked/selected outfit
-                  const refinedOutfit = await refineSingleOutfit(baseOutfit, msg, profile, regenPrefs);
+          // --- AWAIT PARALLEL OUTFIT REFINEMENT ---
+          // The refinement was started earlier in parallel with runChatRefinement.
+          // Also trigger if criteria changed but feedback wasn't detected by keywords.
+          const shouldAlsoRefine = stylistOutfits.length > 0 && criteriaChanged && !outfitRefinementPromise;
+          if (shouldAlsoRefine && stylistOutfits[targetIdx]) {
+              setIsGeneratingRecs(true);
+              const latestItems = updatedCriteria.includedItems || card3Plan?.items || [];
+              const latestStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : (card3Plan?.styles || []);
+              const latestColors = updatedCriteria.colors || card3Plan?.colors || [];
+              const latestFeatures = updatedCriteria.additionalNotes
+                  ? updatedCriteria.additionalNotes.split(', ')
+                  : (card3Plan?.features || []);
+              const regenPrefs = {
+                  ...preferences,
+                  itemType: latestItems.join(', '),
+                  stylePreference: latestStyles.join(', '),
+                  colors: latestColors.join(', '),
+                  location: latestFeatures.join(', '),
+              };
+              outfitRefinementPromise = refineSingleOutfit(stylistOutfits[targetIdx], msg, profile, regenPrefs, buildDecisionSummary());
+          }
+
+          if (outfitRefinementPromise) {
+              try {
+                  const refinedOutfit = await outfitRefinementPromise;
 
                   // Store as pending — don't insert into chat yet, wait for user to click button
                   setPendingRefinedOutfit(refinedOutfit);
@@ -3227,6 +3566,51 @@ export default function App() {
 
                   // Also update the liked outfit in stylistOutfits state for search purposes
                   setStylistOutfits(prev => prev.map((o, i) => i === targetIdx ? refinedOutfit : o));
+
+                  // --- BACKWARDS SYNC: Outfit changes → Style Card ---
+                  // When the user refines an outfit, the stylist may make coordinating changes
+                  // (e.g., updating accessories to match a new dress color). Sync these back
+                  // to the global style card so it stays current with the actual outfit state.
+                  // The style card in chat is NOT changed — only the underlying card3Plan state.
+                  // The user can optionally view the updated card via "Review Style Card" button.
+                  const outfitColors = refinedOutfit.recommendations
+                      .map(r => r.color_role)
+                      .filter(Boolean)
+                      .flatMap(c => c!.split(/[,/&]/).map(s => s.trim()))
+                      .filter(c => c.length > 0 && c.toLowerCase() !== 'any');
+                  const outfitCategories = refinedOutfit.recommendations.map(r => r.category).filter(Boolean);
+
+                  setCard3Plan(prev => {
+                      if (!prev) return prev;
+                      const existingColorsLower = new Set(prev.colors.map(c => c.toLowerCase()));
+                      const newColors = [...new Set(outfitColors.filter(c => !existingColorsLower.has(c.toLowerCase())))];
+                      const existingItemsLower = new Set(prev.items.map(i => i.toLowerCase()));
+                      const newItems = [...new Set(outfitCategories.filter(i => !existingItemsLower.has(i.toLowerCase())))];
+                      if (newColors.length > 0 || newItems.length > 0) {
+                          return {
+                              ...prev,
+                              colors: newColors.length > 0 ? [...prev.colors, ...newColors] : prev.colors,
+                              items: newItems.length > 0 ? [...prev.items, ...newItems] : prev.items,
+                          };
+                      }
+                      return prev;
+                  });
+
+                  // Track backwards-synced colors as user-modified for highlighting
+                  if (outfitColors.length > 0) {
+                      setUserModifiedValues(existing => ({
+                          ...existing,
+                          colors: [...new Set([...existing.colors, ...outfitColors.filter(c =>
+                              !existing.colors.some(e => e.toLowerCase() === c.toLowerCase())
+                          )])],
+                      }));
+                  }
+
+                  // Surface the Review Style Card button so user can optionally inspect the updated card
+                  setShowReviewStyleCard(true);
+
+                  // Re-trigger predictive search with the refined outfit so results are ready
+                  triggerPredictiveSearch(refinedOutfit);
 
                   // Generate hero image in background
                   const requestId = ++heroImageRequestIdRef.current;
@@ -3361,7 +3745,7 @@ export default function App() {
                               <Sparkles size={12} className="text-[#C67B88]" />
                           </span>
                           <div>
-                              <h1 className="text-sm font-bold text-stone-900">Style Assistant</h1>
+                              <h1 className="text-sm font-bold text-stone-900">Muse — Your Personal Stylist</h1>
                               <p className="text-[10px] text-[#8B6F7D]">AI Recommendations</p>
                           </div>
                       </div>
@@ -3690,32 +4074,6 @@ export default function App() {
                       </div>
                   )}
 
-                  {/* Outfit like selector — shown after recommendation cards are in chat */}
-                  {stylistOutfits.length > 0 && !isGeneratingRecs && (
-                      <div className="bg-white/80 rounded-xl border border-rose-100 px-3 py-2.5 shadow-sm">
-                          <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-wider mb-2 text-center">Select your favorite</p>
-                          <div className="flex items-center justify-center gap-2">
-                              {stylistOutfits.map((outfit, oIdx) => {
-                                  const isLiked = likedOutfitIndex === oIdx;
-                                  return (
-                                      <button
-                                          key={oIdx}
-                                          onClick={() => setLikedOutfitIndex(prev => prev === oIdx ? null : oIdx)}
-                                          className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold transition-all ${
-                                              isLiked
-                                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md'
-                                                  : 'bg-stone-50 border border-stone-200 text-stone-500 hover:bg-rose-50'
-                                          }`}
-                                      >
-                                          <Heart size={12} className={isLiked ? 'fill-white' : ''} />
-                                          {String.fromCharCode(65 + oIdx)}
-                                      </button>
-                                  );
-                              })}
-                          </div>
-                      </div>
-                  )}
-
                   {/* Generating recs indicator */}
                   {isGeneratingRecs && (
                       <div className="flex justify-start">
@@ -3734,8 +4092,8 @@ export default function App() {
                       </div>
                   )}
 
-                  {/* Typing indicator for chat */}
-                  {isChatLoading && (
+                  {/* Typing indicator for chat — hidden when streaming is active (▍ cursor visible) */}
+                  {isChatLoading && !chatMessages.some(m => m.content.includes('▍')) && (
                       <div className="flex justify-start">
                           <div className="bg-stone-100 px-4 py-3 rounded-2xl rounded-bl-md">
                               <div className="flex gap-1.5">
@@ -3748,8 +4106,36 @@ export default function App() {
                   )}
               </div>
 
-              {/* Floating "Review Style Card" button — shown after user modifies the plan via chat */}
-              {showReviewStyleCard && card3Plan && stylistOutfits.length === 0 && (
+              {/* Outfit like selector — pinned OUTSIDE scroll area so it's always visible */}
+              {stylistOutfits.length > 0 && !isGeneratingRecs && (
+                  <div className="px-4 py-2 bg-[#FFFBF8] border-t border-rose-100/50">
+                      <div className="flex items-center justify-center gap-2">
+                          <span className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-wider mr-1">Like:</span>
+                          {stylistOutfits.map((outfit, oIdx) => {
+                              const isLiked = likedOutfitIndex === oIdx;
+                              return (
+                                  <button
+                                      key={oIdx}
+                                      onClick={() => handleLikeOutfit(oIdx)}
+                                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
+                                          isLiked
+                                              ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md'
+                                              : 'bg-white border border-stone-200 text-stone-500 hover:bg-rose-50'
+                                      }`}
+                                  >
+                                      <Heart size={12} className={isLiked ? 'fill-white' : ''} />
+                                      Option {String.fromCharCode(65 + oIdx)}
+                                  </button>
+                              );
+                          })}
+                      </div>
+                  </div>
+              )}
+
+              {/* Floating "Review Style Card" button — shown after user modifies the plan via chat.
+                 Available both before AND after outfits are generated, so the user can always
+                 review the latest global style context whenever the style card has been silently updated. */}
+              {showReviewStyleCard && card3Plan && (
                   <div className="flex justify-center px-4 py-2 bg-[#FFFBF8]">
                       <button
                           onClick={() => {
@@ -3862,7 +4248,7 @@ export default function App() {
                       >
                           <Search size={16} />
                           {likedOutfitIndex !== null
-                              ? `Find Items for Option ${String.fromCharCode(65 + likedOutfitIndex)}`
+                              ? `Shop for This Style`
                               : 'Like an outfit to find items'}
                       </button>
                   )}
@@ -4673,9 +5059,31 @@ export default function App() {
                      <div className="w-16 h-16 border-4 border-rose-100 border-t-[#C67B88] rounded-full animate-spin mb-8"></div>
                      <h3 className="text-2xl font-bold font-sans text-stone-900 mb-2">Searching for you</h3>
                      <p className="text-[#8B6F7D] animate-pulse">
-                         Finding the best items across online stores...
+                         {searchProgress.total > 0
+                             ? `Found results for ${searchProgress.completed.length} of ${searchProgress.total} categories...`
+                             : 'Finding the best items across online stores...'}
                      </p>
-                     {selectedItemTypes.length > 0 && (
+                     {/* Progressive category completion indicators */}
+                     {searchProgress.total > 0 && (
+                         <div className="mt-4 w-full max-w-xs">
+                             <div className="h-2 bg-rose-100 rounded-full overflow-hidden">
+                                 <div
+                                     className="h-full bg-gradient-to-r from-[#C67B88] to-[#B56A78] rounded-full transition-all duration-500 ease-out"
+                                     style={{ width: `${(searchProgress.completed.length / searchProgress.total) * 100}%` }}
+                                 />
+                             </div>
+                         </div>
+                     )}
+                     {searchProgress.completed.length > 0 && (
+                         <div className="mt-3 flex flex-wrap justify-center gap-2">
+                             {searchProgress.completed.map((cat, i) => (
+                                 <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full animate-fade-in">
+                                     <Check size={10} /> {cat}
+                                 </span>
+                             ))}
+                         </div>
+                     )}
+                     {selectedItemTypes.length > 0 && searchProgress.completed.length === 0 && (
                          <div className="mt-4 flex flex-wrap justify-center gap-2">
                              {selectedItemTypes.map((item, i) => (
                                  <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-700 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 px-3 py-1.5 rounded-full">
