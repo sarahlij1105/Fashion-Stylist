@@ -414,15 +414,15 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
     const response = await generateContentWithRetry(
       'gemini-3-flash-preview',
       {
-        contents: {
-          parts: [
-            { inlineData: { mimeType, data } },
-            { text: prompt }
-          ]
-        },
-        config: {
-          responseMimeType: 'application/json'
-        }
+      contents: {
+        parts: [
+          { inlineData: { mimeType, data } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: 'application/json'
+      }
       }
     );
 
@@ -513,7 +513,10 @@ You are a smart fashion planning assistant. A user typed a free-text request. Yo
 - For colors: Suggest 3-5 appropriate colors/palettes.
 - For features: Suggest 2-4 relevant features/details.
 
-**suggestedAdditionalItems**: If the user only mentioned 1-2 items, suggest other complementary items they might want (e.g., if user said "dress", suggest ["footwear", "handbags"] as additions). Use exact category names. If user already requested 3+ items or a full outfit, return [].
+**suggestedAdditionalItems Rules:**
+- ONLY populate this if the user EXPLICITLY mentioned specific clothing items (extracted.items = true) AND mentioned only 1-2 items. In that case, suggest complementary items to complete the look (e.g., user said "dress" → suggest ["footwear", "handbags"]).
+- If the user did NOT mention any specific items (extracted.items = false), you MUST set suggestedAdditionalItems to []. In this case, put the full recommended outfit in "items" instead — the user asked for a complete outfit, so recommend everything directly.
+- If the user already requested 3+ items, return [].
 
 **summary**: Write a one-sentence summary of the plan.
 
@@ -678,6 +681,92 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
             outfits: [],
             refined_constraints: "Agent error: " + (e instanceof Error ? e.message : String(e))
         };
+    }
+};
+
+/**
+ * SINGLE OUTFIT REFINER (Gemini 3 Pro)
+ * Takes an existing outfit + user adjustment request and returns ONE updated outfit.
+ * Used when the user picks a favorite and wants tweaks (e.g., "make the dress blue").
+ */
+export const refineSingleOutfit = async (
+    baseOutfit: StylistOutfit,
+    userAdjustment: string,
+    profile: UserProfile,
+    preferences: Preferences
+): Promise<StylistOutfit> => {
+    try {
+        const styleGuideJson = JSON.stringify(masterStyleGuide.master_style_guide, null, 2);
+        const baseOutfitJson = JSON.stringify(baseOutfit, null, 2);
+
+        const prompt = `
+**ROLE:** You are an elite Professional Stylist refining a specific outfit based on the user's request.
+
+**MASTER STYLE GUIDE (Source of Truth):**
+${styleGuideJson}
+
+**USER CONTEXT:**
+- Gender: ${profile.gender}
+- Size: ${profile.estimatedSize}
+${profile.height ? `- Height: ${profile.height}` : ''}
+- Occasion: ${preferences.occasion || 'General / Not specified'}
+- Budget: ${preferences.priceRange || 'Not specified'}
+
+**EXISTING OUTFIT TO REFINE:**
+${baseOutfitJson}
+
+**USER'S ADJUSTMENT REQUEST:** "${userAdjustment}"
+
+**YOUR TASK:**
+Take the existing outfit above and apply the user's requested adjustment. Keep everything else the same unless the adjustment requires coordinating changes (e.g., changing the dress color may require updating accessories to complement).
+
+Rules:
+- Only modify what the user asked to change.
+- If the user asks for a color change on one item, update that item's color_role, item_name, and serp_query accordingly. Optionally adjust 1-2 other items if needed for color harmony (cite the 60-30-10 Rule or similar).
+- If the user asks to swap an item, replace it and adjust the serp_query.
+- Keep the same outfit "name" style but you can slightly adjust it to reflect the change.
+- Update the "logic" field to explain what was changed and why.
+- Maintain the same number of items/categories.
+- Generate proper serp_query strings for any modified items (gender + color + material + item type + key feature).
+
+**OUTPUT FORMAT (Strict JSON — single outfit object, NOT wrapped in an array):**
+{
+  "name": "Updated creative outfit name",
+  "logic": "What was changed and why, citing style guide rules",
+  "body_type_notes": "...",
+  "recommendations": [
+    {
+      "category": "...",
+      "item_name": "...",
+      "serp_query": "...",
+      "style_reason": "...",
+      "color_role": "..."
+    }
+  ]
+}
+`;
+
+        const response = await generateContentWithRetry(
+            'gemini-3-pro-preview',
+            {
+                contents: { parts: [{ text: prompt }] },
+                config: { responseMimeType: 'application/json' }
+            }
+        );
+
+        const text = response.text || '{}';
+        const parsed = JSON.parse(text);
+
+        if (!parsed.name || !parsed.recommendations) {
+            console.error("refineSingleOutfit: Invalid output", parsed);
+            return baseOutfit; // Return original on failure
+        }
+
+        return parsed as StylistOutfit;
+
+    } catch (e) {
+        console.error("refineSingleOutfit failed:", e);
+        return baseOutfit; // Return original on failure
     }
 };
 
@@ -1021,7 +1110,7 @@ export const searchAndRecommend = async (
              console.log(`>> Applying Category-Specific Style for [${category}]: ${categorySpecificStyles[category]}`);
              loopPreferences = { ...preferences, stylePreference: categorySpecificStyles[category] };
         }
-
+        
         // 1. Procurement (Micro-Agent)
         const t0 = performance.now();
         const procurementResult = await runCategoryMicroAgent(category, profile, loopPreferences, pathInstruction, today, styleAnalysis);
@@ -1067,7 +1156,7 @@ export const searchAndRecommend = async (
         if (verificationResult.debugLogs) {
             logs.push(...verificationResult.debugLogs);
         }
-
+        
         return { 
             category, 
             scoredItems: scoredItems,

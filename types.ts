@@ -28,6 +28,8 @@ export enum AppStep {
   // Card 3 Flow Steps
   CARD3_OCCASION = 'CARD3_OCCASION',
   CARD3_CHAT = 'CARD3_CHAT',
+  // Search History
+  SEARCH_HISTORY = 'SEARCH_HISTORY',
 }
 
 // Structured search criteria for the conversational refinement flow
