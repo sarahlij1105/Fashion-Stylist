@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage, OccasionPlanContext } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage, searchSpecificCategories, OccasionPlanContext } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { refinePreferences } from './services/agent_router';
 import { Camera, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, Home, User, Ruler, Footprints, Save, Send, ShoppingBag, Clock, Heart, FileText } from 'lucide-react';
@@ -192,6 +192,11 @@ export default function App() {
   const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; context?: OccasionPlanContext; summary: string } | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [showReviewStyleCard, setShowReviewStyleCard] = useState(false); // floating button to review updated style card
+  const [showUpdatedRecommendation, setShowUpdatedRecommendation] = useState(false); // floating button to view refined recommendation
+  const [pendingRefinedOutfit, setPendingRefinedOutfit] = useState<StylistOutfit | null>(null); // the refined outfit waiting to be inserted into chat
+  // Tracks specific values the user explicitly requested/changed during chat refinement
+  // e.g. { colors: ["Pink"], styles: ["Bohemian"], items: ["footwear"], features: ["Silk"] }
+  const [userModifiedValues, setUserModifiedValues] = useState<{ colors: string[]; styles: string[]; items: string[]; features: string[] }>({ colors: [], styles: [], items: [], features: [] });
 
   // Hoisted ref for chat container auto-scroll
   const chatContainerRef = React.useRef<HTMLDivElement>(null);
@@ -215,17 +220,94 @@ export default function App() {
   };
 
   // --- NEW: Refinement Logic ---
+  // Detect which categories the user wants to re-search based on their refinement text
+  const detectTargetCategories = (userText: string, existingCategories: string[]): string[] => {
+      const text = userText.toLowerCase();
+      const categoryKeywords: Record<string, string[]> = {
+          'dresses': ['dress', 'dresses', 'gown'],
+          'tops': ['top', 'tops', 'shirt', 'blouse', 'tee', 't-shirt', 'camisole', 'tank'],
+          'bottoms': ['bottom', 'bottoms', 'pants', 'jeans', 'skirt', 'trousers', 'shorts'],
+          'outerwear': ['outerwear', 'jacket', 'coat', 'blazer', 'cardigan', 'sweater'],
+          'footwear': ['footwear', 'shoes', 'boots', 'heels', 'sneakers', 'sandals', 'flats', 'loafers'],
+          'handbags': ['handbag', 'handbags', 'bag', 'bags', 'purse', 'clutch', 'tote'],
+          'jewelry': ['jewelry', 'jewelries', 'necklace', 'bracelet', 'earrings', 'ring', 'rings'],
+          'hair_accessories': ['hair', 'hair accessory', 'hair accessories', 'headband', 'clip', 'hat', 'hats'],
+      };
+
+      const matched: string[] = [];
+      for (const cat of existingCategories) {
+          const catLower = cat.toLowerCase().replace('top picks: ', '');
+          const keywords = categoryKeywords[catLower] || [catLower];
+          if (keywords.some(kw => text.includes(kw))) {
+              matched.push(catLower);
+          }
+      }
+      return matched;
+  };
+
   const handleRefinement = async () => {
       if (!searchQuery.trim()) return;
       setIsLoading(true);
       try {
-          const newPrefs = await refinePreferences(preferences, searchQuery);
-          setPreferences(newPrefs);
-          setSearchQuery(''); // Clear input
-          await handleSearch(); // Re-run search (must await so loading state is managed by handleSearch)
+          // Get existing category names from current results
+          const latestResults = messages[messages.length - 1]?.data;
+          const existingCategoryNames = latestResults?.recommendations?.map((r: any) => r.name) || [];
+
+          // Detect if user wants to update specific categories
+          const targetCategories = detectTargetCategories(searchQuery, existingCategoryNames);
+
+          if (targetCategories.length > 0 && targetCategories.length < existingCategoryNames.length && latestResults) {
+              // PARTIAL RE-SEARCH: only re-run the targeted categories
+              console.log(`[Refinement] Partial re-search for: ${targetCategories.join(', ')}`);
+
+              // Build search queries for targeted categories using the refinement text
+              const searchQueriesMap: Record<string, string> = {};
+              for (const cat of targetCategories) {
+                  searchQueriesMap[cat] = `${profile.gender || ''} ${cat} ${searchQuery} ${preferences.stylePreference || ''} ${preferences.colors || ''}`.trim();
+              }
+
+              const newCategoryResults = await searchSpecificCategories(profile, preferences, searchQueriesMap, targetCategories);
+
+              // Merge: keep existing categories that weren't re-searched, replace those that were
+              const targetCatSet = new Set(targetCategories.map(c => c.toLowerCase()));
+              const keptRecommendations = (latestResults.recommendations || []).filter((r: any) => {
+                  const catName = r.name.toLowerCase().replace('top picks: ', '');
+                  return !targetCatSet.has(catName);
+              });
+
+              const mergedRecommendations = [...keptRecommendations, ...newCategoryResults];
+
+              // Create a new message with merged results
+              const mergedResult = {
+                  ...latestResults,
+                  recommendations: mergedRecommendations,
+                  reflectionNotes: `[Partial re-search: ${targetCategories.join(', ')}]\n${latestResults.reflectionNotes || ''}`,
+              };
+              const newMsg: ChatMessage = {
+                  role: 'model' as const,
+                  content: mergedResult.reflectionNotes,
+                  data: mergedResult,
+              };
+
+              // Replace the latest results message with the merged version
+              setMessages(prev => {
+                  const updated = [...prev];
+                  updated[updated.length - 1] = newMsg;
+                  return updated;
+              });
+              setSearchQuery('');
+          } else {
+              // FULL RE-SEARCH: user wants broad changes (e.g., "make everything cheaper")
+              console.log(`[Refinement] Full re-search (no specific categories detected or all categories targeted)`);
+              const newPrefs = await refinePreferences(preferences, searchQuery);
+              setPreferences(newPrefs);
+              setSearchQuery('');
+              await handleSearch();
+          }
       } catch (e) {
           console.error(e);
-          setIsLoading(false); // Only set false if refinePreferences itself fails
+      } finally {
+          setIsLoading(false);
       }
   };
 
@@ -299,11 +381,14 @@ export default function App() {
           console.log(`[Profile] Gender changed: ${prevGenderRef.current} → ${profile.gender}. Clearing stale recommendations.`);
           setStylistOutfits([]);
           setCard3Plan(null);
+          setUserModifiedValues({ colors: [], styles: [], items: [], features: [] });
           setSelectedOutfitIndex(null);
           setLikedOutfitIndex(null);
           setStyleAnalysisResults(null);
           setIsGeneratingRecs(false);
           setChatMessages([]);
+          setShowUpdatedRecommendation(false);
+          setPendingRefinedOutfit(null);
           heroImageRequestIdRef.current++;
           prevGenderRef.current = profile.gender;
       }
@@ -315,9 +400,12 @@ export default function App() {
       if (step === AppStep.GOAL_SELECTION) {
           setStylistOutfits([]);
           setCard3Plan(null);
+          setUserModifiedValues({ colors: [], styles: [], items: [], features: [] });
           setSelectedOutfitIndex(null);
           setLikedOutfitIndex(null);
           setIsGeneratingRecs(false);
+          setShowUpdatedRecommendation(false);
+          setPendingRefinedOutfit(null);
           heroImageRequestIdRef.current++;
       }
   }, [step]);
@@ -576,8 +664,9 @@ export default function App() {
   };
 
   // Helper: normalize detected components (supports new {category, type} and legacy string formats)
+  // Returns per-category type groups for OR logic (e.g., tops: ["tank top", "crop top"])
   const normalizeDetectedComponents = (components: Array<{category: string; type: string} | string> | undefined) => {
-      if (!components || components.length === 0) return { typeNames: [], categories: [] };
+      if (!components || components.length === 0) return { typeNames: [], categories: [], categoryTypes: {} as Record<string, string[]> };
 
       const categoryMapping: Record<string, string> = {
           'top': 'tops', 'tops': 'tops', 'bottom': 'bottoms', 'bottoms': 'bottoms',
@@ -594,24 +683,30 @@ export default function App() {
 
       const typeNames: string[] = [];
       const categories: string[] = [];
+      // Group specific types by category for OR logic (e.g., tops: ["Tank Top", "Crop Top"])
+      const categoryTypes: Record<string, string[]> = {};
 
       for (const comp of components) {
           if (typeof comp === 'object' && comp.category && comp.type) {
               // New format: {category: "tops", type: "tank top"}
-              // Capitalize type for display: "tank top" -> "Tank Top"
               const displayType = comp.type.replace(/\b\w/g, (c: string) => c.toUpperCase());
               typeNames.push(displayType);
               const cat = categoryMapping[comp.category.toLowerCase()] || comp.category.toLowerCase();
               if (!categories.includes(cat)) categories.push(cat);
+              // Group by category — deduplicate
+              if (!categoryTypes[cat]) categoryTypes[cat] = [];
+              if (!categoryTypes[cat].includes(displayType)) categoryTypes[cat].push(displayType);
           } else if (typeof comp === 'string') {
               // Legacy format: "top"
               const cat = categoryMapping[comp.toLowerCase()] || comp.toLowerCase();
               const displayName = fallbackCategoryDisplay[cat] || comp;
               typeNames.push(displayName);
               if (!categories.includes(cat)) categories.push(cat);
+              if (!categoryTypes[cat]) categoryTypes[cat] = [];
+              if (!categoryTypes[cat].includes(displayName)) categoryTypes[cat].push(displayName);
           }
       }
-      return { typeNames, categories };
+      return { typeNames, categories, categoryTypes };
   };
 
   // Initialize search criteria from style analysis results (accepts optional direct result)
@@ -619,8 +714,26 @@ export default function App() {
       const analysisResult = result || styleAnalysisResults;
       
       // Build detected components list using normalized helper
-      const { typeNames: detectedTypeNames, categories: detectedItemCategories } = 
+      const { typeNames: detectedTypeNames, categories: detectedItemCategories, categoryTypes } = 
           normalizeDetectedComponents(analysisResult?.detectedComponents);
+
+      // Detect dress vs top+bottom exclusivity from multiple images
+      const hasDress = detectedItemCategories.includes('dresses');
+      const hasTopBottom = detectedItemCategories.includes('tops') && detectedItemCategories.includes('bottoms');
+      const hasExclusiveOutfitPaths = hasDress && hasTopBottom;
+
+      // Build OR-combined display per category (e.g., "Tank Top OR Crop Top")
+      const orCombinedDisplay: string[] = [];
+      const accessoryCategories = ['outerwear', 'footwear', 'handbags', 'jewelry', 'hair_accessories'];
+      
+      for (const cat of detectedItemCategories) {
+          const types = categoryTypes[cat] || [];
+          if (types.length > 1) {
+              orCombinedDisplay.push(types.join(' OR '));
+          } else if (types.length === 1) {
+              orCombinedDisplay.push(types[0]);
+          }
+      }
 
       const criteria: SearchCriteria = {
           style: analysisResult?.suggestedStyles?.map(s => s.name).join(', ') || null,
@@ -630,22 +743,38 @@ export default function App() {
           excludedMaterials: [],
           occasion: preferences.occasion || null,
           priceRange: preferences.priceRange || null,
-          additionalNotes: '',
+          additionalNotes: hasExclusiveOutfitPaths
+              ? `OUTFIT PATHS: Path A = Dress + accessories; Path B = Top + Bottom + accessories. These are exclusive options for budget calculation.`
+              : '',
       };
       setSearchCriteria(criteria);
       
-      // Build initial system message for chat — use specific type names
-      const componentsText = detectedTypeNames.length > 0 
-          ? detectedTypeNames.join(' + ') 
+      // Build initial system message for chat — use OR-combined display
+      const componentsText = orCombinedDisplay.length > 0 
+          ? orCombinedDisplay.join(' + ') 
           : 'No specific items detected';
       
+      // Build outfit paths description for user if exclusive paths detected
+      let outfitPathsNote = '';
+      if (hasExclusiveOutfitPaths) {
+          const accessories = detectedItemCategories
+              .filter(c => accessoryCategories.includes(c))
+              .map(c => (categoryTypes[c] || []).join(' OR '))
+              .filter(Boolean);
+          const accessoriesText = accessories.length > 0 ? ` + ${accessories.join(' + ')}` : '';
+          const dressTypes = (categoryTypes['dresses'] || []).join(' OR ');
+          const topTypes = (categoryTypes['tops'] || []).join(' OR ');
+          const bottomTypes = (categoryTypes['bottoms'] || []).join(' OR ');
+          outfitPathsNote = `\n\nWe noticed two outfit paths:\n**Path A:** ${dressTypes}${accessoriesText}\n**Path B:** ${topTypes} + ${bottomTypes}${accessoriesText}\n\nBudget will be calculated for each path separately.`;
+      }
+
       const systemMsg: RefinementChatMessage = {
           role: 'system',
-          content: `Style analysis complete. Detected: ${criteria.style || 'N/A'}. Colors: ${criteria.colors.join(', ') || 'Any'}. Components: ${componentsText}.`,
+          content: `Style analysis complete. Detected: ${criteria.style || 'N/A'}. Colors: ${criteria.colors.join(', ') || 'Any'}. Components: ${componentsText}.${hasExclusiveOutfitPaths ? ' [EXCLUSIVE PATHS: dress vs top+bottom]' : ''}`,
       };
       const welcomeMsg: RefinementChatMessage = {
           role: 'assistant',
-          content: `We detected:\n\nStyle: **${criteria.style || 'Not detected'}**\nOverall Color: **${criteria.colors.length > 0 ? criteria.colors.join(', ') : 'Any'}**\nA combination of: **${componentsText}**${criteria.priceRange ? `\nBudget: **${criteria.priceRange}**` : ''}\n\nIs that what you're looking for?`,
+          content: `We detected:\n\nStyle: **${criteria.style || 'Not detected'}**\nOverall Color: **${criteria.colors.length > 0 ? criteria.colors.join(', ') : 'Any'}**\nA combination of: **${componentsText}**${criteria.priceRange ? `\nBudget: **${criteria.priceRange}**` : ''}${outfitPathsNote}\n\nIs that what you're looking for?`,
       };
       setChatMessages([systemMsg, welcomeMsg]);
       setChatInput('');
@@ -704,6 +833,7 @@ export default function App() {
   };
 
   // Fire search from chat with criteria-aware category mapping
+  // Supports OR logic for same-category items and dress vs top+bottom exclusivity
   const handleCard1SearchFromChat = async () => {
       archiveCurrentSearch();
       prevStepBeforeResultsRef.current = step;
@@ -711,18 +841,24 @@ export default function App() {
       setIsLoading(true);
 
       try {
-          // Build a synthetic StylistOutfit from searchCriteria for query generation
           const genderLabel = profile.gender === 'Female' ? "women's" : profile.gender === 'Male' ? "men's" : "unisex";
           const styleLabel = searchCriteria.style || preferences.stylePreference || '';
           const colorsLabel = searchCriteria.colors.length > 0 ? searchCriteria.colors.join(', ') : '';
-          
-          // Build one recommendation per category from searchCriteria
-          const syntheticRecs = searchCriteria.itemCategories.map((cat, idx) => {
-              const specificItem = searchCriteria.includedItems[idx] || cat;
+
+          // Rebuild categoryTypes from current analysis for OR logic
+          const { categoryTypes } = normalizeDetectedComponents(styleAnalysisResults?.detectedComponents);
+
+          // Build one search query per CATEGORY using OR logic for multiple types
+          // e.g., tops: ["Tank Top", "Crop Top"] → "women's Tank Top OR Crop Top casual style"
+          const syntheticRecs = searchCriteria.itemCategories.map(cat => {
+              const types = categoryTypes[cat];
+              const orQuery = types && types.length > 1
+                  ? types.join(' OR ')
+                  : (types?.[0] || cat);
               return {
                   category: cat,
-                  item_name: `${colorsLabel} ${specificItem}`.trim(),
-                  serp_query: `${genderLabel} ${colorsLabel} ${specificItem} ${styleLabel} buy online -pinterest -polyvore -lyst`.trim(),
+                  item_name: `${colorsLabel} ${orQuery}`.trim(),
+                  serp_query: `${genderLabel} ${colorsLabel} ${orQuery} ${styleLabel} buy online -pinterest -polyvore -lyst`.trim(),
                   style_reason: styleLabel,
                   color_role: colorsLabel,
               };
@@ -734,8 +870,6 @@ export default function App() {
               recommendations: syntheticRecs,
           };
 
-          // Step 1: Gemini Pro generates optimized search queries
-          console.log(">> Card 1: Generating search queries with Gemini Pro...");
           const chatPreferences: Preferences = {
               ...preferences,
               stylePreference: searchCriteria.style || preferences.stylePreference,
@@ -745,11 +879,48 @@ export default function App() {
               itemType: searchCriteria.itemCategories.join(', '),
           };
 
+          // Detect exclusive outfit paths: dress vs top+bottom
+          const hasDress = searchCriteria.itemCategories.includes('dresses');
+          const hasTopBottom = searchCriteria.itemCategories.includes('tops') && searchCriteria.itemCategories.includes('bottoms');
+          const hasExclusivePaths = hasDress && hasTopBottom;
+
+          // Step 1: Gemini Pro generates optimized search queries
+          console.log(">> Card 1: Generating search queries with Gemini Pro...");
           const searchQueries = await generateSearchQueries(syntheticOutfit, profile, chatPreferences);
           console.log(">> Search queries:", searchQueries);
 
-          // Step 2: Run simplified pipeline
+          // Step 2: Run the search pipeline
           const result = await searchWithStylistQueries(profile, chatPreferences, searchQueries);
+
+          // Step 3: If exclusive paths exist, add budget breakdown info
+          if (hasExclusivePaths && result.recommendations.length > 0) {
+              const accessoryCats = new Set(['outerwear', 'footwear', 'handbags', 'jewelry', 'hair_accessories']);
+              let dressTotal = 0, topBottomTotal = 0, accessoriesTotal = 0;
+
+              for (const rec of result.recommendations) {
+                  const catName = rec.name.toLowerCase().replace('top picks: ', '');
+                  // Get the cheapest item price from each category
+                  const prices = (rec.components || [])
+                      .map(c => parseFloat((c.price || '').replace(/[^0-9.]/g, '')) || 0)
+                      .filter(p => p > 0);
+                  const cheapest = prices.length > 0 ? Math.min(...prices) : 0;
+
+                  if (catName === 'dresses') {
+                      dressTotal = cheapest;
+                  } else if (catName === 'tops' || catName === 'bottoms') {
+                      topBottomTotal += cheapest;
+                  } else if (accessoryCats.has(catName)) {
+                      accessoriesTotal += cheapest;
+                  }
+              }
+
+              const pathATotal = dressTotal + accessoriesTotal;
+              const pathBTotal = topBottomTotal + accessoriesTotal;
+              result.reflectionNotes = `[OUTFIT PATH BUDGET COMPARISON]\n` +
+                  `Path A (Dress + accessories): ~$${pathATotal.toFixed(0)}\n` +
+                  `Path B (Top + Bottom + accessories): ~$${pathBTotal.toFixed(0)}\n\n` +
+                  result.reflectionNotes;
+          }
 
           const newMsg: ChatMessage = {
               role: 'model',
@@ -805,6 +976,7 @@ export default function App() {
           setSelectedOutfitIndex(null);
           setLikedOutfitIndex(null);
           setCard3Plan(null);
+          setUserModifiedValues({ colors: [], styles: [], items: [], features: [] });
           setIsGeneratingRecs(false);
 
           setStep(AppStep.CARD1_CHAT);
@@ -974,18 +1146,28 @@ export default function App() {
                                       </div>
                                       <p className="text-sm text-stone-700 mb-4">Here's what we detected from your photos:</p>
                                       
-                                      {searchCriteria.includedItems.length > 0 && (
-                                          <div className="mb-4">
-                                              <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Detected Items</p>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {searchCriteria.includedItems.map((item, i) => (
-                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
-                                                          {itemCatIcon(item)} {item}
-                                                      </span>
-                                                  ))}
+                                      {searchCriteria.itemCategories.length > 0 && (() => {
+                                          // Build OR-combined display per category
+                                          const { categoryTypes } = normalizeDetectedComponents(styleAnalysisResults?.detectedComponents);
+                                          return (
+                                              <div className="mb-4">
+                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Detected Items</p>
+                                                  <div className="flex flex-wrap gap-2">
+                                                      {searchCriteria.itemCategories.map((cat, i) => {
+                                                          const types = categoryTypes[cat] || [];
+                                                          const display = types.length > 1
+                                                              ? types.join(' OR ')
+                                                              : (types[0] || cat);
+                                                          return (
+                                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                                  {itemCatIcon(cat)} {display}
+                                                              </span>
+                                                          );
+                                                      })}
+                                                  </div>
                                               </div>
-                                          </div>
-                                      )}
+                                          );
+                                      })()}
 
                                       {searchCriteria.style && (
                                           <div className="mb-4">
@@ -1021,6 +1203,30 @@ export default function App() {
                                               </span>
                                           </div>
                                       )}
+
+                                      {/* Show exclusive outfit paths if detected */}
+                                      {searchCriteria.additionalNotes?.includes('OUTFIT PATHS') && (() => {
+                                          const { categoryTypes } = normalizeDetectedComponents(styleAnalysisResults?.detectedComponents);
+                                          const accessoryCats = ['outerwear', 'footwear', 'handbags', 'jewelry', 'hair_accessories'];
+                                          const accessories = searchCriteria.itemCategories
+                                              .filter(c => accessoryCats.includes(c))
+                                              .map(c => (categoryTypes[c] || []).join(' OR '))
+                                              .filter(Boolean);
+                                          const accText = accessories.length > 0 ? ` + ${accessories.join(' + ')}` : '';
+                                          const dressText = (categoryTypes['dresses'] || ['Dress']).join(' OR ');
+                                          const topText = (categoryTypes['tops'] || ['Top']).join(' OR ');
+                                          const bottomText = (categoryTypes['bottoms'] || ['Bottom']).join(' OR ');
+                                          return (
+                                              <div className="mb-3 p-2.5 bg-amber-50/80 border border-amber-200 rounded-xl">
+                                                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1.5">Two Outfit Paths Detected</p>
+                                                  <div className="space-y-1">
+                                                      <p className="text-[11px] text-amber-900"><strong>Path A:</strong> {dressText}{accText}</p>
+                                                      <p className="text-[11px] text-amber-900"><strong>Path B:</strong> {topText} + {bottomText}{accText}</p>
+                                                  </div>
+                                                  <p className="text-[9px] text-amber-600 mt-1">Budget will be calculated separately for each path.</p>
+                                              </div>
+                                          );
+                                      })()}
                                       
                                       <p className="text-sm text-stone-600 mt-3">Is that what you're looking for?</p>
                                   </div>
@@ -2143,6 +2349,7 @@ export default function App() {
           setSelectedOutfitIndex(null);
           setLikedOutfitIndex(null);
           setCard3Plan(null);
+          setUserModifiedValues({ colors: [], styles: [], items: [], features: [] });
           setStyleAnalysisResults(null);
           
           try {
@@ -2729,12 +2936,15 @@ export default function App() {
       setChatMessages([]);
       setChatInput('');
       setCard3Plan(null);
+      setUserModifiedValues({ colors: [], styles: [], items: [], features: [] });
       setStylistOutfits([]);
       setSelectedOutfitIndex(null);
       setLikedOutfitIndex(null);
       setStyleAnalysisResults(null);
       setIsGeneratingRecs(false);
       setShowReviewStyleCard(false);
+      setShowUpdatedRecommendation(false);
+      setPendingRefinedOutfit(null);
       heroImageRequestIdRef.current++;
 
       // Show user's original message in the chat
@@ -2787,6 +2997,8 @@ export default function App() {
   const handleCard3Confirm = async () => {
       if (!card3Plan) return;
       setShowReviewStyleCard(false); // hide review button once confirming
+      setShowUpdatedRecommendation(false);
+      setPendingRefinedOutfit(null);
 
       console.log(`[Card3 Confirm] Generating recommendations. Profile gender: ${profile.gender}`);
 
@@ -2820,17 +3032,37 @@ export default function App() {
           setSelectedOutfitIndex(0);
 
           // Fire hero image generation in background (non-blocking, with cancellation guard)
+          // When images are ready, freeze outfits into a chat system message
           const requestId = ++heroImageRequestIdRef.current;
           generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
               if (heroImageRequestIdRef.current === requestId) {
                   setStylistOutfits(outfitsWithImages);
+                  // Update the frozen chat message with hero images
+                  const frozenWithImages: RefinementChatMessage = {
+                      role: 'system',
+                      content: JSON.stringify({ type: 'outfit_recommendations', outfits: outfitsWithImages }),
+                  };
+                  setChatMessages(prev => prev.map(m => {
+                      try {
+                          const parsed = JSON.parse(m.content);
+                          if (parsed.type === 'outfit_recommendations' && !parsed._isUpdate) return frozenWithImages;
+                      } catch {}
+                      return m;
+                  }));
               }
           });
+
+          // Freeze the 3 outfits as a chat message (will be updated with images when ready)
+          const frozenRecsMsg: RefinementChatMessage = {
+              role: 'system',
+              content: JSON.stringify({ type: 'outfit_recommendations', outfits: response.outfits }),
+          };
+          setChatMessages(prev => [...prev, frozenRecsMsg]);
 
           // Add a guidance message asking the user to pick their favorite
           const pickMsg: RefinementChatMessage = {
               role: 'assistant',
-              content: `Here are 3 outfit options! Swipe through them above and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "make the dress red" or "swap the heels for flats") and I'll update it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
+              content: `Here are 3 outfit options! Swipe through them and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "make the dress floral" or "swap the heels for flats") and I'll refine it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
           };
           setChatMessages(prev => [...prev, pickMsg]);
       } catch (e) {
@@ -2905,41 +3137,28 @@ export default function App() {
           if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
               setCard3Plan(prev => {
                   if (!prev) return prev;
-                  const updatedPlan = {
-                      ...prev,
-                      styles: updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles,
-                      colors: updatedCriteria.colors || prev.colors,
-                      items: updatedCriteria.includedItems || prev.items,
-                      features: updatedCriteria.additionalNotes ? updatedCriteria.additionalNotes.split(', ') : prev.features,
-                  };
+                  const newStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles;
+                  const newColors = updatedCriteria.colors || prev.colors;
+                  const newItems = updatedCriteria.includedItems || prev.items;
+                  const newFeatures = updatedCriteria.additionalNotes ? updatedCriteria.additionalNotes.split(', ') : prev.features;
 
-                  // Also update the style card system message in chat so it re-renders with new data
-                  setChatMessages(prevMsgs => prevMsgs.map(m => {
-                      if (m.role === 'system' && m.content.includes('card3_plan')) {
-                          try {
-                              const oldPd = JSON.parse(m.content);
-                              return {
-                                  ...m,
-                                  content: JSON.stringify({
-                                      ...oldPd,
-                                      styles: updatedPlan.styles,
-                                      colors: updatedPlan.colors,
-                                      items: updatedPlan.items,
-                                      features: updatedPlan.features,
-                                      // Mark user-modified fields as extracted (user preference)
-                                      extracted: {
-                                          ...oldPd.extracted,
-                                          ...(updatedCriteria.style ? { styles: true } : {}),
-                                          ...(updatedCriteria.colors ? { colors: true } : {}),
-                                          ...(updatedCriteria.includedItems ? { items: true } : {}),
-                                          ...(updatedCriteria.additionalNotes ? { features: true } : {}),
-                                      },
-                                  }),
-                              };
-                          } catch { return m; }
-                      }
-                      return m;
+                  // Track which specific values are new/changed by the user
+                  const prevColorsLower = new Set(prev.colors.map(c => c.toLowerCase()));
+                  const prevStylesLower = new Set(prev.styles.map(s => s.toLowerCase()));
+                  const prevItemsLower = new Set(prev.items.map(i => i.toLowerCase()));
+                  const prevFeaturesLower = new Set(prev.features.map(f => f.toLowerCase()));
+
+                  setUserModifiedValues(existing => ({
+                      colors: [...new Set([...existing.colors, ...newColors.filter(c => !prevColorsLower.has(c.toLowerCase()))])],
+                      styles: [...new Set([...existing.styles, ...newStyles.filter(s => !prevStylesLower.has(s.toLowerCase()))])],
+                      items: [...new Set([...existing.items, ...newItems.filter(i => !prevItemsLower.has(i.toLowerCase()))])],
+                      features: [...new Set([...existing.features, ...newFeatures.filter(f => !prevFeaturesLower.has(f.toLowerCase()))])],
                   }));
+
+                  const updatedPlan = { ...prev, styles: newStyles, colors: newColors, items: newItems, features: newFeatures };
+
+                  // DO NOT mutate existing style card messages — keep originals frozen for comparison.
+                  // The "Review Style Card" button will insert a new message with the latest plan.
 
                   return updatedPlan;
               });
@@ -2977,48 +3196,58 @@ export default function App() {
           if (criteriaChanged && stylistOutfits.length === 0) {
               setShowReviewStyleCard(true);
           }
-          if (criteriaChanged && stylistOutfits.length > 0 && selectedOutfitIndex !== null) {
-              const baseOutfit = stylistOutfits[selectedOutfitIndex];
-              const optionLabel = String.fromCharCode(65 + selectedOutfitIndex);
+          // After outfits exist: refine ONLY the liked outfit (or first if none liked)
+          // Don't update live cards — store as pending and show "View Updated Recommendation" button
+          if (criteriaChanged && stylistOutfits.length > 0) {
+              const targetIdx = likedOutfitIndex ?? 0;
+              const baseOutfit = stylistOutfits[targetIdx];
               setIsGeneratingRecs(true);
               try {
-                  // Build preferences reflecting the latest criteria
+                  // Build preferences reflecting the latest criteria including features
                   const latestItems = updatedCriteria.includedItems || card3Plan?.items || [];
                   const latestStyles = updatedCriteria.style ? updatedCriteria.style.split(', ') : (card3Plan?.styles || []);
                   const latestColors = updatedCriteria.colors || card3Plan?.colors || [];
+                  const latestFeatures = updatedCriteria.additionalNotes
+                      ? updatedCriteria.additionalNotes.split(', ')
+                      : (card3Plan?.features || []);
                   const regenPrefs = {
                       ...preferences,
                       itemType: latestItems.join(', '),
                       stylePreference: latestStyles.join(', '),
                       colors: latestColors.join(', '),
+                      location: latestFeatures.join(', '), // Pass features via location field for prompt access
                   };
 
-                  // Refine only the selected outfit
+                  // Refine only the liked/selected outfit
                   const refinedOutfit = await refineSingleOutfit(baseOutfit, msg, profile, regenPrefs);
 
-                  // Replace just that outfit in the array
-                  setStylistOutfits(prev => prev.map((o, i) => i === selectedOutfitIndex ? refinedOutfit : o));
+                  // Store as pending — don't insert into chat yet, wait for user to click button
+                  setPendingRefinedOutfit(refinedOutfit);
+                  setShowUpdatedRecommendation(true);
 
-                  // Generate hero image for the refined outfit in background
+                  // Also update the liked outfit in stylistOutfits state for search purposes
+                  setStylistOutfits(prev => prev.map((o, i) => i === targetIdx ? refinedOutfit : o));
+
+                  // Generate hero image in background
                   const requestId = ++heroImageRequestIdRef.current;
                   generateOutfitHeroImage(refinedOutfit).then(heroBase64 => {
                       if (heroImageRequestIdRef.current === requestId && heroBase64) {
-                          setStylistOutfits(prev => prev.map((o, i) =>
-                              i === selectedOutfitIndex ? { ...o, heroImageBase64: heroBase64 } : o
-                          ));
+                          const updated = { ...refinedOutfit, heroImageBase64: heroBase64 };
+                          setPendingRefinedOutfit(updated);
+                          setStylistOutfits(prev => prev.map((o, i) => i === targetIdx ? updated : o));
                       }
                   });
 
                   const regenMsg: RefinementChatMessage = {
                       role: 'assistant',
-                      content: `I've updated **Option ${optionLabel}** with your changes! Take a look above.`,
+                      content: `I've refined **Option ${String.fromCharCode(65 + targetIdx)}** based on your request! Tap the **"View Updated Recommendation"** button to see the updated outfit.`,
                   };
                   setChatMessages(prev => [...prev, regenMsg]);
               } catch (regenErr) {
-                  console.error('Single outfit refinement failed:', regenErr);
+                  console.error('Outfit refinement failed:', regenErr);
                   const regenErrMsg: RefinementChatMessage = {
                       role: 'assistant',
-                      content: `I updated the criteria but couldn't refine Option ${optionLabel}. Please try again.`,
+                      content: `I updated the style card but couldn't refine the outfit. Please try again.`,
                   };
                   setChatMessages(prev => [...prev, regenErrMsg]);
               } finally {
@@ -3142,9 +3371,12 @@ export default function App() {
 
               {/* Chat area */}
               <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-                  {/* All messages in chronological order */}
+                  {/* All messages in chronological order.
+                      IMPORTANT: Style cards (card3_plan system messages) are FROZEN once created.
+                      Each card renders purely from its own serialized JSON content — no external state.
+                      Original cards stay unchanged; updated versions are added as NEW messages. */}
                   {chatMessages.map((msg, idx) => {
-                      // System message with card3_plan → render inline analysis card
+                      // System message with card3_plan → render inline analysis card (frozen snapshot)
                       if (msg.role === 'system' && msg.content.includes('card3_plan')) {
                           let pd: any = null;
                           try { pd = JSON.parse(msg.content); } catch {}
@@ -3153,6 +3385,22 @@ export default function App() {
                           // Separate data into extracted (from user) and suggested (by agent)
                           const extractedSections: any[] = [];
                           const suggestedSections: any[] = [];
+
+                          // User-modified values (only present on _isReview cards)
+                          const um = pd._userModified || { colors: [], styles: [], items: [], features: [] };
+                          const isModified = (field: string, value: string) =>
+                              pd._isReview && (um[field] || []).some((v: string) => v.toLowerCase() === value.toLowerCase());
+
+                          // Helper: sort user-modified values first in arrays
+                          const prioritize = (arr: string[], field: string) => {
+                              if (!pd._isReview) return arr;
+                              const modSet = new Set((um[field] || []).map((v: string) => v.toLowerCase()));
+                              return [...arr].sort((a, b) => {
+                                  const aM = modSet.has(a.toLowerCase()) ? 0 : 1;
+                                  const bM = modSet.has(b.toLowerCase()) ? 0 : 1;
+                                  return aM - bM;
+                              });
+                          };
 
                           // Occasion
                           if (pd.occasion) {
@@ -3165,50 +3413,22 @@ export default function App() {
                               (ext.occasion ? extractedSections : suggestedSections).push(section);
                           }
 
-                          // Context (culture, role, season, venue, etc.) — always extracted from user
-                          const ctx = pd.context || {};
-                          const contextEntries = Object.entries(ctx).filter(([_, v]) => v && v !== 'null');
-                          if (contextEntries.length > 0) {
-                              const contextLabelMap: Record<string, string> = {
-                                  culture: '🌍 Culture',
-                                  role: '👤 Role',
-                                  season: '🌤 Season',
-                                  weather: '🌡 Weather',
-                                  venue: '📍 Venue',
-                                  formality: '🎩 Formality',
-                                  timeOfDay: '🕐 Time',
-                                  location: '📌 Location',
-                                  activityLevel: '🏃 Activity',
-                                  bodyConsiderations: '💫 Special',
-                                  companions: '👥 With',
-                                  dressCode: '👔 Dress Code',
-                                  ageGroup: '🎂 Age Group',
-                              };
-                              const section = (
-                                  <div key="context" className="mb-2.5">
-                                      <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Context</p>
-                                      <div className="flex flex-wrap gap-1.5">
-                                          {contextEntries.map(([k, v]) => (
-                                              <span key={k} className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200 rounded-full text-[10px] font-bold text-violet-700">
-                                                  {contextLabelMap[k] || k}: {String(v)}
-                                              </span>
-                                          ))}
-                                      </div>
-                                  </div>
-                              );
-                              // Context is always from the user's input
-                              (ext.context ? extractedSections : suggestedSections).push(section);
-                          }
+                          // Context is kept in data for the agent but NOT displayed in the UI
 
                           // Styles
                           if (pd.styles?.length > 0) {
+                              const sortedStyles = prioritize(pd.styles, 'styles');
                               const section = (
                                   <div key="styles" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Style</p>
                                       <div className="flex flex-wrap gap-1.5">
-                                          {pd.styles.map((s: string, i: number) => (
-                                              <span key={i} className="px-2 py-1 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-[10px] font-bold text-rose-700">
-                                                  {s}
+                                          {sortedStyles.map((s: string, i: number) => (
+                                              <span key={i} className={`px-2 py-1 rounded-full text-[10px] font-bold ${
+                                                  isModified('styles', s)
+                                                      ? 'bg-gradient-to-r from-amber-100 to-yellow-100 border-2 border-[#D4AF6A] text-amber-900 ring-1 ring-[#D4AF6A]/30'
+                                                      : 'bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 text-rose-700'
+                                              }`}>
+                                                  {isModified('styles', s) && <span className="mr-0.5">★</span>}{s}
                                               </span>
                                           ))}
                                       </div>
@@ -3219,13 +3439,18 @@ export default function App() {
 
                           // Items
                           if (pd.items?.length > 0) {
+                              const sortedItems = prioritize(pd.items, 'items');
                               const section = (
                                   <div key="items" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Outfit Items</p>
                                       <div className="flex flex-wrap gap-1.5">
-                                          {pd.items.map((item: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-rose-200 rounded-full text-[10px] font-bold text-stone-800 capitalize shadow-sm">
-                                                  {itemCatIcon(item)} {item}
+                                          {sortedItems.map((item: string, i: number) => (
+                                              <span key={i} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold capitalize shadow-sm ${
+                                                  isModified('items', item)
+                                                      ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-[#D4AF6A] text-amber-900 ring-1 ring-[#D4AF6A]/30'
+                                                      : 'bg-white border border-rose-200 text-stone-800'
+                                              }`}>
+                                                  {isModified('items', item) && <span>★</span>}{itemCatIcon(item)} {item}
                                               </span>
                                           ))}
                                       </div>
@@ -3236,13 +3461,19 @@ export default function App() {
 
                           // Colors
                           if (pd.colors?.length > 0) {
+                              const sortedColors = prioritize(pd.colors, 'colors');
                               const section = (
                                   <div key="colors" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Color Palette</p>
                                       <div className="flex flex-wrap gap-1.5">
-                                          {pd.colors.map((c: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-rose-200 rounded-full text-[10px] font-bold text-stone-700 shadow-sm">
-                                                  <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                          {sortedColors.map((c: string, i: number) => (
+                                              <span key={i} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold shadow-sm ${
+                                                  isModified('colors', c)
+                                                      ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-2 border-[#D4AF6A] text-amber-900 ring-1 ring-[#D4AF6A]/30'
+                                                      : 'bg-white border border-rose-200 text-stone-700'
+                                              }`}>
+                                                  <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} />
+                                                  {isModified('colors', c) && <span className="mr-0.5">★</span>}{c}
                                               </span>
                                           ))}
                                       </div>
@@ -3253,13 +3484,18 @@ export default function App() {
 
                           // Features
                           if (pd.features?.length > 0) {
+                              const sortedFeatures = prioritize(pd.features, 'features');
                               const section = (
                                   <div key="features" className="mb-2.5">
                                       <p className="text-[9px] font-bold text-stone-400 uppercase tracking-wider mb-1">Key Features</p>
                                       <div className="flex flex-wrap gap-1.5">
-                                          {pd.features.map((f: string, i: number) => (
-                                              <span key={i} className="px-2 py-1 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-[10px] font-medium text-amber-800">
-                                                  {f}
+                                          {sortedFeatures.map((f: string, i: number) => (
+                                              <span key={i} className={`px-2 py-1 rounded-full text-[10px] font-medium ${
+                                                  isModified('features', f)
+                                                      ? 'bg-gradient-to-r from-amber-100 to-yellow-100 border-2 border-[#D4AF6A] text-amber-900 font-bold ring-1 ring-[#D4AF6A]/30'
+                                                      : 'bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] text-amber-800'
+                                              }`}>
+                                                  {isModified('features', f) && <span className="mr-0.5">★</span>}{f}
                                               </span>
                                           ))}
                                       </div>
@@ -3287,14 +3523,16 @@ export default function App() {
                                           <div>{extractedSections}</div>
                                       )}
 
-                                      {/* Divider — only show if there are both extracted and suggested */}
+                                      {/* Suggestions: show divider only on original card, not on updated cards */}
                                       {suggestedSections.length > 0 && (
                                           <>
-                                              <div className="flex items-center gap-2 my-2.5">
-                                                  <div className="flex-1 h-px bg-stone-200" />
-                                                  <span className="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Suggestions</span>
-                                                  <div className="flex-1 h-px bg-stone-200" />
-                                              </div>
+                                              {!pd._isReview && (
+                                                  <div className="flex items-center gap-2 my-2.5">
+                                                      <div className="flex-1 h-px bg-stone-200" />
+                                                      <span className="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Suggestions</span>
+                                                      <div className="flex-1 h-px bg-stone-200" />
+                                                  </div>
+                                              )}
                                               <div>{suggestedSections}</div>
                                           </>
                                       )}
@@ -3303,8 +3541,116 @@ export default function App() {
                           );
                       }
 
-                      // Skip other system messages
-                      if (msg.role === 'system') return null;
+                      // Frozen outfit recommendation cards (3-card swipeable or single updated card)
+                      if (msg.role === 'system') {
+                          let recData: any = null;
+                          try { recData = JSON.parse(msg.content); } catch {}
+
+                          // 3-card swipeable recommendations (original set)
+                          if (recData?.type === 'outfit_recommendations' && recData.outfits?.length > 0) {
+                              return (
+                                  <div key={idx} className="flex justify-start">
+                                      <div className="max-w-[95%] w-full">
+                                          <div className="flex items-center gap-1.5 mb-2">
+                                              <Sparkles size={12} className="text-[#C67B88]" />
+                                              <span className="text-xs font-bold text-[#C67B88]">Outfit Recommendations</span>
+                                          </div>
+                                          <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory -mx-1 px-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                                              {recData.outfits.map((outfit: any, oIdx: number) => {
+                                                  const styleTitle = outfit.name?.split(' ').slice(0, 5).join(' ') || `Option ${String.fromCharCode(65 + oIdx)}`;
+                                                  return (
+                                                      <div key={oIdx} className="snap-center shrink-0 w-[75%] rounded-xl overflow-hidden border-2 border-rose-200 shadow-sm bg-white">
+                                                          {/* Title */}
+                                                          <div className="bg-gradient-to-b from-rose-50/80 to-white px-3 pt-2 pb-1.5 text-center">
+                                                              <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-wider">Option {String.fromCharCode(65 + oIdx)}</p>
+                                                              <h3 className="font-serif text-sm font-semibold text-stone-900 truncate">{styleTitle}</h3>
+                                                          </div>
+                                                          {/* Hero Image */}
+                                                          {outfit.heroImageBase64 ? (
+                                                              <div className="w-full aspect-[4/5] bg-stone-50 overflow-hidden">
+                                                                  <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
+                                                              </div>
+                                                          ) : (
+                                                              <div className="w-full aspect-[4/5] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
+                                                                  <div className="text-center text-[#C67B88]/50">
+                                                                      <div className="w-6 h-6 border-2 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-1" />
+                                                                      <p className="text-[9px] font-medium">Generating...</p>
+                                                                  </div>
+                                                              </div>
+                                                          )}
+                                                          {/* Item pills */}
+                                                          <div className="px-2 py-1.5 bg-white flex gap-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+                                                              {outfit.recommendations?.map((rec: any, rIdx: number) => (
+                                                                  <span key={rIdx} className="inline-flex items-center gap-0.5 shrink-0 px-2 py-1 bg-stone-50 border border-stone-200 rounded-full text-[9px] font-medium text-stone-700">
+                                                                      {rec.item_name?.split(' ').slice(0, 3).join(' ')}
+                                                                      {rec.color_role && (
+                                                                          <span className="w-2 h-2 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
+                                                                      )}
+                                                                  </span>
+                                                              ))}
+                                                          </div>
+                                                      </div>
+                                                  );
+                                              })}
+                                          </div>
+                                          {recData.outfits.length > 1 && (
+                                              <p className="text-[9px] text-stone-400 text-center mt-1 italic">← Swipe to see all {recData.outfits.length} options →</p>
+                                          )}
+                                      </div>
+                                  </div>
+                              );
+                          }
+
+                          // Single updated recommendation card
+                          if (recData?.type === 'outfit_recommendation_single' && recData.outfit) {
+                              const outfit = recData.outfit;
+                              const styleTitle = outfit.name?.split(' ').slice(0, 5).join(' ') || 'Updated Outfit';
+                              return (
+                                  <div key={idx} className="flex justify-start">
+                                      <div className="max-w-[85%]">
+                                          <div className="flex items-center gap-1.5 mb-2">
+                                              <Sparkles size={12} className="text-[#C67B88]" />
+                                              <span className="text-xs font-bold text-[#C67B88]">Updated Recommendation</span>
+                                              <span className="text-[8px] font-bold text-white bg-gradient-to-r from-[#C67B88] to-[#B56A78] px-1.5 py-0.5 rounded-full">REVISED</span>
+                                          </div>
+                                          <div className="rounded-xl overflow-hidden border-2 border-[#C67B88] shadow-lg shadow-rose-100 bg-white">
+                                              {/* Title */}
+                                              <div className="bg-gradient-to-b from-rose-50/80 to-white px-3 pt-2 pb-1.5 text-center">
+                                                  <h3 className="font-serif text-sm font-semibold text-stone-900 truncate">{styleTitle}</h3>
+                                              </div>
+                                              {/* Hero Image */}
+                                              {outfit.heroImageBase64 ? (
+                                                  <div className="w-full aspect-[4/5] bg-stone-50 overflow-hidden">
+                                                      <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
+                                                  </div>
+                                              ) : (
+                                                  <div className="w-full aspect-[4/5] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
+                                                      <div className="text-center text-[#C67B88]/50">
+                                                          <div className="w-6 h-6 border-2 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-1" />
+                                                          <p className="text-[9px] font-medium">Generating...</p>
+                                                      </div>
+                                                  </div>
+                                              )}
+                                              {/* Item pills */}
+                                              <div className="px-2 py-1.5 bg-white flex gap-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+                                                  {outfit.recommendations?.map((rec: any, rIdx: number) => (
+                                                      <span key={rIdx} className="inline-flex items-center gap-0.5 shrink-0 px-2 py-1 bg-stone-50 border border-stone-200 rounded-full text-[9px] font-medium text-stone-700">
+                                                          {rec.item_name?.split(' ').slice(0, 3).join(' ')}
+                                                          {rec.color_role && (
+                                                              <span className="w-2 h-2 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
+                                                          )}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              );
+                          }
+
+                          // Skip other system messages
+                          return null;
+                      }
 
                       // User and assistant messages
                       return (
@@ -3344,92 +3690,31 @@ export default function App() {
                       </div>
                   )}
 
-                  {/* Outfit recommendation card — single view with prev/next */}
-                  {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (() => {
-                      const outfit = stylistOutfits[selectedOutfitIndex];
-                      const isLiked = likedOutfitIndex === selectedOutfitIndex;
-                      const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
-                      return (
-                          <div className="pt-0.5">
-                              {/* Card */}
-                              <div className={`rounded-xl overflow-hidden transition-all border-2 ${isLiked ? 'border-[#C67B88] shadow-lg shadow-rose-100' : 'border-rose-200 shadow-sm'}`}>
-                                  {/* Title + Liked badge */}
-                                  <div className="bg-gradient-to-b from-rose-50/80 to-white px-3 pt-2.5 pb-2 text-center">
-                                      <h3 className="font-serif text-base font-semibold text-stone-900">{styleTitle}</h3>
-                                      {isLiked && (
-                                          <p className="text-[10px] text-[#C67B88] font-medium mt-0.5 flex items-center justify-center gap-1">
-                                              <Heart size={10} className="fill-[#C67B88] text-[#C67B88]" /> Liked
-                                          </p>
-                                      )}
-                                  </div>
-
-                                  {/* Hero Image */}
-                                  {outfit.heroImageBase64 ? (
-                                      <div className="w-full aspect-[4/5] bg-stone-50 overflow-hidden">
-                                          <img src={outfit.heroImageBase64} alt={styleTitle} className="w-full h-full object-cover" />
-                                      </div>
-                                  ) : (
-                                      <div className="w-full aspect-[4/5] bg-gradient-to-br from-rose-50 to-pink-50 flex items-center justify-center">
-                                          <div className="text-center text-[#C67B88]/50">
-                                              <div className="w-8 h-8 border-2 border-rose-200 border-t-[#C67B88] rounded-full animate-spin mx-auto mb-2" />
-                                              <p className="text-[10px] font-medium">Generating preview...</p>
-                                          </div>
-                                      </div>
-                                  )}
-
-                                  {/* Item pills */}
-                                  <div className="px-2.5 py-2 bg-white flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-                                      {outfit.recommendations.map((rec, rIdx) => (
-                                          <span key={rIdx} className="inline-flex items-center gap-1 shrink-0 px-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-full text-[10px] font-medium text-stone-700">
-                                              {rec.item_name.split(' ').slice(0, 3).join(' ')}
-                                              {rec.color_role && (
-                                                  <>
-                                                      <span className="w-2 h-2 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(rec.color_role) }} />
-                                                      <span className="text-stone-400">{rec.color_role.split(' ').slice(0, 2).join(' ')}</span>
-                                                  </>
-                                              )}
-                                          </span>
-                                      ))}
-                                  </div>
-                              </div>
-
-                              {/* Navigation: Prev / Like / Next */}
-                              <div className="flex items-center justify-center gap-3 mt-2.5">
-                                  <button
-                                      onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev > 0 ? prev - 1 : stylistOutfits.length - 1)}
-                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
-                                  >
-                                      <ChevronLeft size={18} />
-                                  </button>
-                                  <button
-                                      onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
-                                      className={`px-5 py-2 rounded-full font-bold text-xs flex items-center gap-1.5 transition-all ${
-                                          isLiked
-                                              ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
-                                              : 'bg-stone-100 border border-stone-200 text-stone-400 hover:bg-stone-200'
-                                      }`}
-                                  >
-                                      <Heart size={14} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
-                                  </button>
-                                  <button
-                                      onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev < stylistOutfits.length - 1 ? prev + 1 : 0)}
-                                      className="w-10 h-10 rounded-full border border-rose-200 bg-white flex items-center justify-center text-[#8B6F7D] hover:bg-rose-50 transition-colors shadow-sm"
-                                  >
-                                      <ChevronRight size={18} />
-                                  </button>
-                              </div>
-
-                              {/* Dot indicators */}
-                              {stylistOutfits.length > 1 && (
-                                  <div className="flex justify-center gap-1.5 mt-2">
-                                      {stylistOutfits.map((_, dIdx) => (
-                                          <button key={dIdx} onClick={() => setSelectedOutfitIndex(dIdx)} className={`w-1.5 h-1.5 rounded-full transition-all ${dIdx === selectedOutfitIndex ? 'bg-[#C67B88] w-3' : 'bg-rose-200'}`} />
-                                      ))}
-                                  </div>
-                              )}
+                  {/* Outfit like selector — shown after recommendation cards are in chat */}
+                  {stylistOutfits.length > 0 && !isGeneratingRecs && (
+                      <div className="bg-white/80 rounded-xl border border-rose-100 px-3 py-2.5 shadow-sm">
+                          <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-wider mb-2 text-center">Select your favorite</p>
+                          <div className="flex items-center justify-center gap-2">
+                              {stylistOutfits.map((outfit, oIdx) => {
+                                  const isLiked = likedOutfitIndex === oIdx;
+                                  return (
+                                      <button
+                                          key={oIdx}
+                                          onClick={() => setLikedOutfitIndex(prev => prev === oIdx ? null : oIdx)}
+                                          className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold transition-all ${
+                                              isLiked
+                                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md'
+                                                  : 'bg-stone-50 border border-stone-200 text-stone-500 hover:bg-rose-50'
+                                          }`}
+                                      >
+                                          <Heart size={12} className={isLiked ? 'fill-white' : ''} />
+                                          {String.fromCharCode(65 + oIdx)}
+                                      </button>
+                                  );
+                              })}
                           </div>
-                      );
-                  })()}
+                      </div>
+                  )}
 
                   {/* Generating recs indicator */}
                   {isGeneratingRecs && (
@@ -3441,7 +3726,9 @@ export default function App() {
                                       <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                                       <div className="w-2 h-2 bg-stone-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                                   </div>
-                                  <span className="text-xs text-stone-500">Creating outfit options...</span>
+                                  <span className="text-xs text-stone-500">
+                                      {stylistOutfits.length > 0 ? 'Refining your outfit...' : 'Creating outfit options...'}
+                                  </span>
                               </div>
                           </div>
                       </div>
@@ -3466,20 +3753,24 @@ export default function App() {
                   <div className="flex justify-center px-4 py-2 bg-[#FFFBF8]">
                       <button
                           onClick={() => {
-                              // Insert the latest style card as a new chat message
-                              // Get the latest extracted flags from the existing system message
-                              const existingSysMsg = chatMessages.find(m => m.role === 'system' && m.content.includes('card3_plan'));
-                              let existingExtracted: any = {};
-                              if (existingSysMsg) {
-                                  try { existingExtracted = JSON.parse(existingSysMsg.content).extracted || {}; } catch {}
-                              }
+                              // Insert the latest style card as a NEW chat message (original stays frozen)
+                              // For updated cards, mark all present fields as "extracted" since the user has confirmed/refined them
+                              const updatedExtracted: any = {
+                                  occasion: !!card3Plan.items?.length,
+                                  items: !!card3Plan.items?.length,
+                                  styles: !!card3Plan.styles?.length,
+                                  colors: !!card3Plan.colors?.length,
+                                  features: !!card3Plan.features?.length,
+                                  context: !!card3Plan.context && Object.keys(card3Plan.context).length > 0,
+                              };
                               const latestPlanMsg: RefinementChatMessage = {
                                   role: 'system',
                                   content: JSON.stringify({
                                       type: 'card3_plan',
                                       ...card3Plan,
-                                      extracted: existingExtracted,
+                                      extracted: updatedExtracted,
                                       _isReview: true, // marker so UI can label this as "Updated"
+                                      _userModified: userModifiedValues, // track which values were user-requested for highlighting
                                   }),
                               };
                               setChatMessages(prev => [...prev, latestPlanMsg]);
@@ -3489,6 +3780,35 @@ export default function App() {
                       >
                           <FileText size={16} />
                           Review Style Card
+                      </button>
+                  </div>
+              )}
+
+              {/* Floating "View Updated Recommendation" button — shown after user refines an outfit via chat */}
+              {showUpdatedRecommendation && pendingRefinedOutfit && (
+                  <div className="flex justify-center px-4 py-2 bg-[#FFFBF8]">
+                      <button
+                          onClick={() => {
+                              // Insert the refined outfit as a NEW frozen chat message
+                              const frozenSingleMsg: RefinementChatMessage = {
+                                  role: 'system',
+                                  content: JSON.stringify({
+                                      type: 'outfit_recommendation_single',
+                                      outfit: pendingRefinedOutfit,
+                                      _isUpdate: true,
+                                  }),
+                              };
+                              setChatMessages(prev => [...prev, frozenSingleMsg]);
+                              setShowUpdatedRecommendation(false);
+                              setPendingRefinedOutfit(null);
+                              // Auto-like the refined outfit index
+                              const targetIdx = likedOutfitIndex ?? 0;
+                              setLikedOutfitIndex(targetIdx);
+                          }}
+                          className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white rounded-full shadow-md hover:shadow-lg transition-all text-sm font-bold"
+                      >
+                          <Sparkles size={16} />
+                          View Updated Recommendation
                       </button>
                   </div>
               )}
@@ -3530,7 +3850,7 @@ export default function App() {
                   )}
 
                   {/* Search button — only enabled when user has liked an outfit */}
-                  {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
+                  {stylistOutfits.length > 0 && (
                       <button
                           onClick={handleCard3Search}
                           disabled={likedOutfitIndex === null}

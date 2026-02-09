@@ -928,6 +928,56 @@ Follow these steps IN ORDER for each of the 3 outfits you create:
             };
         }
 
+        // Post-generation filter: strip any items outside the requested categories
+        // This prevents the stylist from sneaking in extra categories (e.g., adding shoes when only jacket was requested)
+        const requestedCategories = new Set(
+            targetItems.split(',').map((t: string) => t.trim().toLowerCase())
+        );
+        if (requestedCategories.size > 0) {
+            // Build a fuzzy category mapping for matching
+            const categoryAliases: Record<string, string[]> = {
+                'tops': ['top', 'tops', 'shirt', 'blouse'],
+                'bottoms': ['bottom', 'bottoms', 'pants', 'skirt', 'jeans'],
+                'dresses': ['dress', 'dresses', 'gown'],
+                'outerwear': ['outerwear', 'jacket', 'coat', 'blazer', 'cardigan'],
+                'footwear': ['footwear', 'shoes', 'boots', 'heels', 'sneakers', 'sandals'],
+                'handbags': ['handbag', 'handbags', 'bag', 'purse', 'clutch'],
+                'jewelry': ['jewelry', 'jewelries', 'necklace', 'bracelet', 'earrings'],
+                'hair_accessories': ['hair accessories', 'hair_accessories', 'headband', 'hat'],
+            };
+
+            const isRequested = (category: string) => {
+                const catLower = category.toLowerCase().trim();
+                // Direct match
+                if (requestedCategories.has(catLower)) return true;
+                // Check if the category belongs to any requested group
+                for (const requested of requestedCategories) {
+                    // Check all aliases
+                    for (const [group, aliases] of Object.entries(categoryAliases)) {
+                        if ((aliases.includes(requested) || requested === group) &&
+                            (aliases.includes(catLower) || catLower === group)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            let strippedCount = 0;
+            for (const outfit of parsed.outfits) {
+                if (outfit.recommendations && Array.isArray(outfit.recommendations)) {
+                    const before = outfit.recommendations.length;
+                    outfit.recommendations = outfit.recommendations.filter((rec: any) =>
+                        isRequested(rec.category)
+                    );
+                    strippedCount += before - outfit.recommendations.length;
+                }
+            }
+            if (strippedCount > 0) {
+                console.log(`[Stylist Agent] Stripped ${strippedCount} items outside requested categories (${targetItems})`);
+            }
+        }
+
         const result = {
             outfits: parsed.outfits,
             refined_constraints: parsed.refined_constraints || ""
@@ -980,6 +1030,9 @@ The user is **${profile.gender}**. ALL recommendations MUST be gender-appropriat
 ${profile.height ? `- Height: ${profile.height}` : ''}
 - Occasion: ${preferences.occasion || 'General / Not specified'}
 - Budget: ${preferences.priceRange || 'Not specified'}
+- Desired Styles: ${preferences.stylePreference || 'Not specified'}
+- Desired Colors: ${preferences.colors || 'Not specified'}
+- Key Features/Requirements: ${preferences.location || 'Not specified'}
 
 **EXISTING OUTFIT TO REFINE:**
 ${baseOutfitJson}
@@ -987,10 +1040,11 @@ ${baseOutfitJson}
 **USER'S ADJUSTMENT REQUEST:** "${userAdjustment}"
 
 **YOUR TASK:**
-Take the existing outfit above and apply the user's requested adjustment. Keep everything else the same unless the adjustment requires coordinating changes (e.g., changing the dress color may require updating accessories to complement).
+Take the existing outfit above and apply the user's requested adjustment. The "Key Features/Requirements" above reflect the user's LATEST style card preferences — make sure the refined outfit aligns with ALL of them, not just the adjustment text. Keep everything else the same unless the adjustment requires coordinating changes (e.g., changing the dress color may require updating accessories to complement).
 
 Rules:
-- Only modify what the user asked to change.
+- PRIORITIZE the user's adjustment request — this is the most important change.
+- Ensure the refined outfit also respects the Key Features/Requirements listed above.
 - If the user asks for a color change on one item, update that item's color_role, item_name, and serp_query accordingly. Optionally adjust 1-2 other items if needed for color harmony (cite the 60-30-10 Rule or similar).
 - If the user asks to swap an item, replace it and adjust the serp_query.
 - Keep the same outfit "name" style but you can slightly adjust it to reflect the change.
@@ -1052,21 +1106,24 @@ export const generateOutfitHeroImage = async (
             `- ${rec.item_name} (${rec.category}${rec.color_role ? `, ${rec.color_role}` : ''})`
         ).join('\n');
 
-        const prompt = `You are an expert fashion product photographer. Generate a high-fidelity, commercial flat-lay photograph of the following outfit items arranged together on a clean surface.
+        const itemCount = outfit.recommendations.length;
+
+        const prompt = `You are an expert fashion product photographer. Generate a high-fidelity, commercial flat-lay photograph of EXACTLY the following ${itemCount} item(s) on a clean surface.
 
 **Style Constraints (Strict):**
 1. Background: Solid, neutral off-white/cream studio background. Seamless and clean.
-2. Composition: Flat-lay arrangement of ALL items below, neatly organized as a complete outfit. Items should be arranged naturally as they would be worn — top above bottom, shoes below, accessories to the side.
+2. Composition: Flat-lay arrangement of ONLY the ${itemCount} item(s) listed below. Do NOT add any extra clothing items, shoes, bags, accessories, or anything else not in the list. If only 1 item is listed, show ONLY that 1 item. If 2 items are listed, show ONLY those 2 items.
 3. Lighting: Soft, professional studio lighting highlighting fabric textures and true colors. No harsh shadows.
 4. Vibe: Minimalist, high-end e-commerce aesthetic. Similar to Zara or COS lookbook flat-lays.
 5. Do NOT show any human body, head, limbs, or mannequin. Items only.
 6. Each item should be clearly visible and identifiable.
+7. **CRITICAL: Show EXACTLY ${itemCount} item(s) — no more, no less. Do NOT invent or add items that are not in the list below.**
 
 **Outfit: "${outfit.name}"**
-Items to include:
+Items to include (ONLY these ${itemCount} item(s), nothing else):
 ${itemDescriptions}
 
-Generate this flat-lay product photograph now.`;
+Generate this flat-lay product photograph now showing ONLY the items listed above.`;
 
         const response = await generateContentWithRetry(
             'gemini-2.5-flash-image',
@@ -1366,6 +1423,91 @@ export const searchWithStylistQueries = async (
         console.error("Error in Simplified Search Pipeline:", error);
         throw error;
     }
+};
+
+/**
+ * PARTIAL CATEGORY RE-SEARCH
+ * Re-runs the search pipeline for ONLY the specified categories, returning
+ * new results that can be merged with existing results for unchanged categories.
+ * This avoids re-running the entire pipeline when the user only wants to update
+ * specific categories (e.g., "find me a different dress" doesn't need to re-search footwear).
+ */
+export const searchSpecificCategories = async (
+    profile: UserProfile,
+    preferences: Preferences,
+    searchQueries: Record<string, string>,
+    categoriesToSearch: string[]
+): Promise<RecommendationItem[]> => {
+    const startTime = performance.now();
+    const timings: string[] = [];
+    const logMessages: string[] = [];
+    const today = new Date().toLocaleDateString();
+
+    console.log(`--- PARTIAL RE-SEARCH for: ${categoriesToSearch.join(', ')} ---`);
+
+    const pipelinePromises = categoriesToSearch.map(async (category) => {
+        const catStart = performance.now();
+        const query = searchQueries[category] || `${profile.gender || ''} ${category} ${preferences.stylePreference || ''} ${preferences.colors || ''}`.trim();
+
+        logMessages.push(`[${category}] Re-search Query: "${query}"`);
+
+        try {
+            // 1. Procurement
+            const pathInstruction = `Search for: ${query}`;
+            const loopPreferences = { ...preferences, stylePreference: query };
+            const procurementResult = await runCategoryMicroAgent(
+                category, profile, loopPreferences, pathInstruction, today, undefined
+            );
+
+            // 2. Verification
+            const verificationResult = await runVerificationStep(
+                { validatedItems: { [category]: procurementResult.items } },
+                "None", preferences, profile
+            );
+            const verifiedItems = verificationResult.validatedItems?.[category] || [];
+
+            // 3. Top 3
+            const top3 = verifiedItems.slice(0, 3);
+
+            const totalDuration = (performance.now() - catStart).toFixed(0);
+            timings.push(`Re-search (${category}): ${totalDuration}ms`);
+            logMessages.push(`[${category}] Re-search: ${procurementResult.initialCandidateCount} found → ${verifiedItems.length} verified → ${top3.length} selected (${totalDuration}ms)`);
+
+            return { category, topItems: top3 };
+        } catch (err: any) {
+            console.error(`[${category}] Re-search FAILED:`, err);
+            logMessages.push(`[${category}] Re-search failed: ${err.message}`);
+            return { category, topItems: [] };
+        }
+    });
+
+    const results = await Promise.all(pipelinePromises);
+
+    const recommendations: RecommendationItem[] = [];
+    results.forEach(res => {
+        if (res.topItems.length > 0) {
+            recommendations.push({
+                name: `Top Picks: ${res.category}`,
+                description: `Updated results from re-search.`,
+                components: res.topItems.map((item: any) => ({
+                    category: res.category,
+                    name: item.name,
+                    brand: item.brand || item.source || "Unknown",
+                    price: item.price || "Check Site",
+                    purchaseUrl: item.purchaseUrl,
+                    validationNote: `Verified ✓`,
+                    fallbackSearchUrl: item.fallbackSearchUrl,
+                    imageUrl: item.image || undefined
+                }))
+            });
+        }
+    });
+
+    const totalTime = (performance.now() - startTime).toFixed(0);
+    console.log(`--- PARTIAL RE-SEARCH COMPLETE (${totalTime}ms) ---`);
+    console.log(logMessages.join('\n'));
+
+    return recommendations;
 };
 
 // --- LEGACY ORCHESTRATOR (kept for backward compatibility) ---
