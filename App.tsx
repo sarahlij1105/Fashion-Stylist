@@ -5,6 +5,76 @@ import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
 import { refinePreferences } from './services/agent_router';
 import { Camera, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, Home, User, Ruler, Footprints, Save, Send, ShoppingBag, Clock, Heart, FileText } from 'lucide-react';
 
+// --- USER STYLE DNA (MVP): Persistent preference learning via localStorage ---
+// Accumulates user preferences across sessions so agents can prioritize past favorites.
+// Future: migrate to a backend database for cross-device sync and richer analytics.
+interface StyleDNA {
+    colors: Record<string, number>;   // color → frequency count
+    styles: Record<string, number>;   // style → frequency count
+    features: Record<string, number>; // feature → frequency count
+    occasions: Record<string, number>;// occasion → frequency count
+    dislikes: string[];               // explicitly rejected items
+    totalSessions: number;
+    lastUpdated: number;
+}
+
+const STYLE_DNA_KEY = 'muse_style_dna_v1';
+
+const loadStyleDNA = (): StyleDNA => {
+    try {
+        const raw = localStorage.getItem(STYLE_DNA_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch { /* ignore parse errors */ }
+    return { colors: {}, styles: {}, features: {}, occasions: {}, dislikes: [], totalSessions: 0, lastUpdated: 0 };
+};
+
+const saveStyleDNA = (dna: StyleDNA) => {
+    try {
+        dna.lastUpdated = Date.now();
+        localStorage.setItem(STYLE_DNA_KEY, JSON.stringify(dna));
+    } catch { /* localStorage full or unavailable — silently skip */ }
+};
+
+/** Merge current session preferences into the persistent Style DNA. */
+const updateStyleDNA = (session: {
+    colors?: string[]; styles?: string[]; features?: string[];
+    occasion?: string; dislikes?: string[];
+}) => {
+    const dna = loadStyleDNA();
+    const bump = (map: Record<string, number>, keys: string[]) => {
+        for (const k of keys) {
+            if (k && k.trim()) map[k.trim()] = (map[k.trim()] || 0) + 1;
+        }
+    };
+    if (session.colors?.length) bump(dna.colors, session.colors);
+    if (session.styles?.length) bump(dna.styles, session.styles);
+    if (session.features?.length) bump(dna.features, session.features);
+    if (session.occasion) bump(dna.occasions, [session.occasion]);
+    if (session.dislikes?.length) {
+        dna.dislikes = [...new Set([...dna.dislikes, ...session.dislikes])].slice(-20);
+    }
+    dna.totalSessions++;
+    saveStyleDNA(dna);
+    console.log(`[Style DNA] Updated — ${dna.totalSessions} sessions, ${Object.keys(dna.colors).length} colors, ${Object.keys(dna.styles).length} styles tracked`);
+};
+
+/** Get a compact prompt-friendly summary of historical preferences (~100-200 bytes). */
+const getStyleDNASummary = (): string => {
+    const dna = loadStyleDNA();
+    if (dna.totalSessions < 1) return '';
+    const top = (map: Record<string, number>, n = 3) =>
+        Object.entries(map).sort(([, a], [, b]) => b - a).slice(0, n).map(([k]) => k);
+    const parts: string[] = [];
+    const topColors = top(dna.colors);
+    const topStyles = top(dna.styles);
+    const topFeatures = top(dna.features);
+    if (topColors.length) parts.push(`Historically prefers colors: ${topColors.join(', ')}`);
+    if (topStyles.length) parts.push(`Favorite styles: ${topStyles.join(', ')}`);
+    if (topFeatures.length) parts.push(`Preferred features: ${topFeatures.join(', ')}`);
+    if (dna.dislikes.length) parts.push(`Dislikes: ${dna.dislikes.slice(-5).join(', ')}`);
+    return parts.length > 0 ? `[From ${dna.totalSessions} past session(s)] ${parts.join('. ')}.` : '';
+};
+
 // Helper: map color name to a CSS color for visual dots
 const colorNameToCSS = (name: string): string => {
     const n = name.toLowerCase().trim();
@@ -226,6 +296,7 @@ export default function App() {
   // Passed to each agent as additional context for better coherence without a full shared memory system.
   const buildDecisionSummary = (): string => {
       const parts: string[] = [];
+      // Current session decisions
       if (userModifiedValues.colors.length > 0) parts.push(`User wants colors: ${userModifiedValues.colors.join(', ')}`);
       if (userModifiedValues.styles.length > 0) parts.push(`User wants styles: ${userModifiedValues.styles.join(', ')}`);
       if (userModifiedValues.items.length > 0) parts.push(`User changed items: ${userModifiedValues.items.join(', ')}`);
@@ -233,12 +304,14 @@ export default function App() {
       if (likedOutfitIndex !== null && stylistOutfits[likedOutfitIndex]) {
           parts.push(`User liked: Option ${String.fromCharCode(65 + likedOutfitIndex)} ("${stylistOutfits[likedOutfitIndex].name}")`);
       }
-      // Include the last 2-3 user requests from chat for context
       const recentUserMsgs = chatMessages
           .filter(m => m.role === 'user')
           .slice(-3)
           .map(m => m.content.substring(0, 80));
       if (recentUserMsgs.length > 0) parts.push(`Recent requests: ${recentUserMsgs.join(' | ')}`);
+      // Persistent style DNA from past sessions — agents prioritize historical preferences
+      const dnaHint = getStyleDNASummary();
+      if (dnaHint) parts.push(dnaHint);
       return parts.length > 0 ? parts.join('. ') + '.' : '';
   };
 
@@ -494,6 +567,38 @@ export default function App() {
           prevGenderRef.current = profile.gender;
       }
   }, [profile.gender]);
+
+  // --- STYLE DNA: Persist session preferences when search results are displayed ---
+  // This is the natural "session complete" moment — the user confirmed their preferences
+  // and we have a successful search. Save their choices so future sessions can reference them.
+  useEffect(() => {
+      if (step === AppStep.RESULTS) {
+          const sessionColors = [
+              ...(userModifiedValues.colors || []),
+              ...(card3Plan?.colors || []),
+              ...(searchCriteria.colors || []),
+          ].filter(Boolean);
+          const sessionStyles = [
+              ...(userModifiedValues.styles || []),
+              ...(card3Plan?.styles || []),
+              ...(searchCriteria.style ? [searchCriteria.style] : []),
+          ].filter(Boolean);
+          const sessionFeatures = [
+              ...(userModifiedValues.features || []),
+              ...(card3Plan?.features || []),
+          ].filter(Boolean);
+          const sessionOccasion = preferences.occasion || card3Plan?.summary?.split(' ')[0] || '';
+
+          if (sessionColors.length > 0 || sessionStyles.length > 0 || sessionFeatures.length > 0 || sessionOccasion) {
+              updateStyleDNA({
+                  colors: sessionColors,
+                  styles: sessionStyles,
+                  features: sessionFeatures,
+                  occasion: sessionOccasion,
+              });
+          }
+      }
+  }, [step]);
 
   // Clear all flow-specific state when returning to the home page
   // Ensures a clean slate for any new flow the user starts
@@ -3278,43 +3383,65 @@ export default function App() {
           };
 
           const response = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis, card3Plan.context);
-          setStylistOutfits(response.outfits);
+          console.log(`[Card3 Confirm] Stylist returned ${response.outfits?.length ?? 0} outfits`, response.outfits?.map((o: any) => o.name));
+
+          if (!response.outfits || response.outfits.length === 0) {
+              // Outfits came back empty — retry once with a direct prompt
+              console.warn('[Card3 Confirm] No outfits returned — retrying with fallback prompt...');
+              const retryResponse = await generateStylistRecommendations(profile, card3Prefs, syntheticAnalysis, card3Plan.context);
+              console.log(`[Card3 Confirm] Retry returned ${retryResponse.outfits?.length ?? 0} outfits`);
+              if (retryResponse.outfits && retryResponse.outfits.length > 0) {
+                  response.outfits = retryResponse.outfits;
+                  response.refined_constraints = retryResponse.refined_constraints;
+              }
+          }
+
+          setStylistOutfits(response.outfits || []);
           setSelectedOutfitIndex(0);
 
-          // Fire hero image generation in background (non-blocking, with cancellation guard)
-          // When images are ready, freeze outfits into a chat system message
-          const requestId = ++heroImageRequestIdRef.current;
-          generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
-              if (heroImageRequestIdRef.current === requestId) {
-                  setStylistOutfits(outfitsWithImages);
-                  // Update the frozen chat message with hero images
-                  const frozenWithImages: RefinementChatMessage = {
-                      role: 'system',
-                      content: JSON.stringify({ type: 'outfit_recommendations', outfits: outfitsWithImages }),
-                  };
-                  setChatMessages(prev => prev.map(m => {
-                      try {
-                          const parsed = JSON.parse(m.content);
-                          if (parsed.type === 'outfit_recommendations' && !parsed._isUpdate) return frozenWithImages;
-                      } catch {}
-                      return m;
-                  }));
-              }
-          });
+          if (response.outfits && response.outfits.length > 0) {
+              // Fire hero image generation in background (non-blocking, with cancellation guard)
+              // When images are ready, freeze outfits into a chat system message
+              const requestId = ++heroImageRequestIdRef.current;
+              generateAllOutfitHeroImages(response.outfits).then(outfitsWithImages => {
+                  if (heroImageRequestIdRef.current === requestId) {
+                      setStylistOutfits(outfitsWithImages);
+                      // Update the frozen chat message with hero images
+                      const frozenWithImages: RefinementChatMessage = {
+                          role: 'system',
+                          content: JSON.stringify({ type: 'outfit_recommendations', outfits: outfitsWithImages }),
+                      };
+                      setChatMessages(prev => prev.map(m => {
+                          try {
+                              const parsed = JSON.parse(m.content);
+                              if (parsed.type === 'outfit_recommendations' && !parsed._isUpdate) return frozenWithImages;
+                          } catch {}
+                          return m;
+                      }));
+                  }
+              });
 
-          // Freeze the 3 outfits as a chat message (will be updated with images when ready)
-          const frozenRecsMsg: RefinementChatMessage = {
-              role: 'system',
-              content: JSON.stringify({ type: 'outfit_recommendations', outfits: response.outfits }),
-          };
-          setChatMessages(prev => [...prev, frozenRecsMsg]);
+              // Freeze the 3 outfits as a chat message (will be updated with images when ready)
+              const frozenRecsMsg: RefinementChatMessage = {
+                  role: 'system',
+                  content: JSON.stringify({ type: 'outfit_recommendations', outfits: response.outfits }),
+              };
+              setChatMessages(prev => [...prev, frozenRecsMsg]);
 
-          // Add a guidance message asking the user to pick their favorite
-          const pickMsg: RefinementChatMessage = {
-              role: 'assistant',
-              content: `Here are 3 outfit options! Swipe through them and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "make the dress floral" or "swap the heels for flats") and I'll refine it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
-          };
-          setChatMessages(prev => [...prev, pickMsg]);
+              // Add a guidance message asking the user to pick their favorite
+              const pickMsg: RefinementChatMessage = {
+                  role: 'assistant',
+                  content: `Here are 3 outfit options! Swipe through them and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "make the dress floral" or "swap the heels for flats") and I'll refine it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
+              };
+              setChatMessages(prev => [...prev, pickMsg]);
+          } else {
+              // Still no outfits after retry — show helpful error
+              const errorMsg: RefinementChatMessage = {
+                  role: 'assistant',
+                  content: `I had trouble generating outfit recommendations this time. Let me try again — please tap **Generate Outfit Options** once more, or adjust your style card and retry.`,
+              };
+              setChatMessages(prev => [...prev, errorMsg]);
+          }
       } catch (e) {
           console.error("Card 3 Stylist Failed", e);
           alert(`Something went wrong. Error: ${e instanceof Error ? e.message : String(e)}`);
@@ -3530,7 +3657,9 @@ export default function App() {
           }
 
           // Show floating "Review Style Card" button whenever criteria changed
-          if (criteriaChanged) {
+          // OR when the user's message looks like an adjustment request (even if the model
+          // only captured it in additionalNotes rather than a formal criteria field change).
+          if (criteriaChanged || looksLikeOutfitFeedback) {
               setShowReviewStyleCard(true);
           }
 
@@ -3919,6 +4048,13 @@ export default function App() {
                                               )}
                                               <div>{suggestedSections}</div>
                                           </>
+                                      )}
+
+                                      {/* Fallback: if no sections rendered (e.g. stale cache or empty response) */}
+                                      {extractedSections.length === 0 && suggestedSections.length === 0 && (
+                                          <div className="text-xs text-stone-400 italic py-2">
+                                              {pd.summary || 'Style card data is loading... Try refreshing if this persists.'}
+                                          </div>
                                       )}
                                   </div>
                               </div>

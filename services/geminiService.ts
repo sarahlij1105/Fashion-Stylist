@@ -725,7 +725,7 @@ export const generateOccasionPlan = async (
 
     // --- CACHE CHECK ---
     const normalizedInput = userInput.trim().toLowerCase().replace(/\s+/g, ' ');
-    const planCacheKey = `occasion_plan_${cacheManager.generateFastHash(
+    const planCacheKey = `occasion_plan_v3_${cacheManager.generateFastHash(
         normalizedInput + '|' + (profile.gender || '') + '|' + (profile.estimatedSize || '')
     )}`;
     const cachedPlan = await cacheManager.checkCache(planCacheKey);
@@ -808,12 +808,15 @@ When recommending styles, colors, features, and items for non-extracted fields, 
 }
 Only include context fields that the user mentioned or strongly implied. Set all others to null. If NO context was detected, set "context" to {} and extracted.context to false.`;
 
-    // Dynamic prompt: only the per-request parts that change
+    // Dynamic prompt: per-request parts + explicit output reminder to ensure completeness
     const prompt = `**User Input:** "${userInput}"
 **User Gender:** ${profile.gender || 'Not specified'} (all recommendations must be gender-appropriate)
 **User Size:** ${profile.estimatedSize || 'Not specified'}
 ${styleGuideSection}
-Generate the style card now. Return strict JSON only.`;
+Generate the style card now. You MUST return a complete JSON with ALL these fields populated:
+- "occasion" (string), "items" (array of clothing categories), "styles" (array), "colors" (array of 3-5 colors), "features" (array)
+- "context" (object with culture/role/season/venue etc), "summary" (one sentence), "extracted" (object of booleans), "suggestedAdditionalItems" (array)
+Even for fields the user didn't mention, YOU MUST recommend suitable values — never leave items/styles/colors/features as empty arrays.`;
 
     try {
         const response = await generateContentWithRetry(
@@ -848,6 +851,14 @@ Generate the style card now. Return strict JSON only.`;
             extracted: parsed.extracted || { occasion: false, items: false, styles: false, colors: false, features: false, context: false },
             suggestedAdditionalItems: parsed.suggestedAdditionalItems || [],
         };
+
+        // Safety check: if the model returned empty arrays, warn and DON'T cache
+        // (so the next call retries with a fresh API call instead of serving blanks)
+        const isEmpty = result.items.length === 0 && result.styles.length === 0 && result.colors.length === 0;
+        if (isEmpty) {
+            console.warn(`[Occasion Planner] WARNING: Model returned empty items/styles/colors for "${userInput}". NOT caching.`);
+            return result;
+        }
 
         console.log(`[Occasion Planner] Extracted context:`, cleanContext);
 
@@ -898,7 +909,7 @@ export const generateStylistRecommendations = async (
             keptItems,
             contextStr,
         ].join('|').toLowerCase().replace(/\s+/g, ' ');
-        const recCacheKey = `stylist_recs_${cacheManager.generateFastHash(recCacheSignature)}`;
+        const recCacheKey = `stylist_recs_v3_${cacheManager.generateFastHash(recCacheSignature)}`;
         const cachedRecs = await cacheManager.checkCache(recCacheKey);
         if (cachedRecs) {
             console.log(`[Stylist Agent] Cache HIT for recs (${profile.gender}, ${targetItems})`);
@@ -932,7 +943,9 @@ export const generateStylistRecommendations = async (
 ${preferences.colors ? `- Preferred Colors: ${preferences.colors}` : ''}
 ${contextStr ? `**OCCASION CONTEXT:** ${contextStr}` : ''}
 
-Generate 3 outfits. Return strict JSON.`;
+Generate exactly 3 distinct outfit options. Each outfit MUST have a "name", "logic", "body_type_notes", and a "recommendations" array with one object per requested category.
+Each recommendation object MUST have: "category", "item_name", "serp_query" (starting with "${genderLabel}"), "style_reason", "color_role".
+Return strict JSON: { "outfits": [...], "refined_constraints": "" }`;
 
         // Static styling workflow instructions → systemInstruction for implicit caching
         const stylistSystemInstruction = `You are an elite Professional Stylist. Follow the 7-Step Recommendation Workflow:
@@ -941,9 +954,22 @@ Generate 3 outfits. Return strict JSON.`;
 3. LAYERING & COMPLETION: Add "third piece". Follow Five-Piece Rule.
 4. FINAL VALIDATION: One-Statement Rule. No absolute rule violations.
 
-Create exactly 3 distinct outfit options with different personalities. ONLY recommend items in the requested categories.
+Create exactly 3 distinct outfit options with different personalities (e.g., one classic, one trendy, one bold). ONLY recommend items in the requested categories — do NOT add extra categories.
 For each item, generate a serp_query (Google Shopping search string). Each style_reason must cite a specific guide rule.
-Output strict JSON: { "outfits": [{ "name", "logic", "body_type_notes", "recommendations": [{ "category", "item_name", "serp_query", "style_reason", "color_role" }] }], "refined_constraints": "" }`;
+Output strict JSON with this exact structure:
+{
+  "outfits": [
+    {
+      "name": "Creative outfit name",
+      "logic": "Step-by-step reasoning citing guide rules",
+      "body_type_notes": "How silhouette was adjusted",
+      "recommendations": [
+        { "category": "category_name", "item_name": "Specific item name", "serp_query": "Google Shopping search query", "style_reason": "Why this item", "color_role": "Color name(s)" }
+      ]
+    }
+  ],
+  "refined_constraints": ""
+}`;
 
         const response = await generateContentWithRetry(
             'gemini-3-pro-preview',
@@ -1021,9 +1047,15 @@ Output strict JSON: { "outfits": [{ "name", "logic", "body_type_notes", "recomme
             refined_constraints: parsed.refined_constraints || ""
         };
 
-        // Cache the result (2 hour TTL)
-        await cacheManager.setCache(recCacheKey, result, 7200);
-        console.log(`[Stylist Agent] Cached recommendations (${profile.gender}, ${targetItems})`);
+        // Safety guard: only cache if we actually got non-empty outfits with recommendations
+        const hasValidOutfits = result.outfits.length > 0 &&
+            result.outfits.some((o: any) => o.recommendations && o.recommendations.length > 0);
+        if (hasValidOutfits) {
+            await cacheManager.setCache(recCacheKey, result, 7200);
+            console.log(`[Stylist Agent] Cached recommendations (${profile.gender}, ${targetItems})`);
+        } else {
+            console.warn(`[Stylist Agent] Skipped caching — outfits empty or missing recommendations`);
+        }
 
         return result;
 
@@ -1079,7 +1111,8 @@ ${baseOutfitJson}
 
 **USER'S ADJUSTMENT REQUEST:** "${userAdjustment}"
 
-Apply the adjustment. Align with ALL Key Features/Requirements above. Return strict JSON.`;
+Apply the adjustment. Align with ALL Key Features/Requirements above.
+Return a single JSON outfit object (NOT an array) with: "name", "logic", "body_type_notes", and a "recommendations" array where each item has "category", "item_name", "serp_query" (starting with "${genderLabel}"), "style_reason", "color_role".`;
 
         // Static refinement instructions → systemInstruction for implicit caching
         const refineSystemInstruction = `You are an elite Professional Stylist. You refine existing outfits based on user feedback.
@@ -1089,7 +1122,8 @@ Rules:
 - For color changes: update color_role, item_name, serp_query. Optionally adjust 1-2 items for color harmony.
 - Maintain the same number of items/categories.
 - Update the "logic" field to explain changes, citing style guide rules.
-- Output strict JSON: single outfit object (NOT an array): { "name", "logic", "body_type_notes", "recommendations": [{ "category", "item_name", "serp_query", "style_reason", "color_role" }] }`;
+- Output strict JSON — a single outfit object (NOT wrapped in an array):
+  { "name": "...", "logic": "...", "body_type_notes": "...", "recommendations": [{ "category": "...", "item_name": "...", "serp_query": "...", "style_reason": "...", "color_role": "..." }] }`;
 
         const response = await generateContentWithRetry(
             'gemini-3-pro-preview',
