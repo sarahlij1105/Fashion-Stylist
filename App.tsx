@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppStep, UserProfile, Preferences, FashionPurpose, ChatMessage, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, StylistOutfit, ProfessionalStylistResponse } from './types';
-import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, resolveItemCategory, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage } from './services/geminiService';
+import { analyzeUserPhoto, analyzeProfilePhoto, searchAndRecommend, searchAndRecommendCard1, generateStylistRecommendations, refineSingleOutfit, generateOccasionPlan, runChatRefinement, generateSearchQueries, searchWithStylistQueries, generateAllOutfitHeroImages, generateOutfitHeroImage, OccasionPlanContext } from './services/geminiService';
 import { runStyleExampleAnalyzer } from './services/agent_style_analyzer';
-import { analyzeUserIntent, refinePreferences } from './services/agent_router';
-import { Upload, Camera, ArrowLeft, ShieldCheck, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, MessageSquare, ArrowRight, Home, User, Ruler, Footprints, Save, Send, Palette, ShoppingBag, Tag, Ban, Calendar, DollarSign, StickyNote, Clock, Heart, FileText } from 'lucide-react';
-// import ReactMarkdown from 'react-markdown';
+import { refinePreferences } from './services/agent_router';
+import { Camera, ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, X, FileImage, ExternalLink, Layers, Search, Check, Sparkles, Plus, Edit2, AlertCircle, Home, User, Ruler, Footprints, Save, Send, ShoppingBag, Clock, Heart, FileText } from 'lucide-react';
 
 // Helper: map color name to a CSS color for visual dots
 const colorNameToCSS = (name: string): string => {
@@ -190,7 +189,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<RefinementChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [card3OccasionInput, setCard3OccasionInput] = useState('');
-  const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; context?: Record<string, string>; summary: string } | null>(null);
+  const [card3Plan, setCard3Plan] = useState<{ items: string[]; styles: string[]; colors: string[]; features: string[]; context?: OccasionPlanContext; summary: string } | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [showReviewStyleCard, setShowReviewStyleCard] = useState(false); // floating button to review updated style card
 
@@ -223,11 +222,10 @@ export default function App() {
           const newPrefs = await refinePreferences(preferences, searchQuery);
           setPreferences(newPrefs);
           setSearchQuery(''); // Clear input
-          handleSearch(); // Re-run search
+          await handleSearch(); // Re-run search (must await so loading state is managed by handleSearch)
       } catch (e) {
           console.error(e);
-      } finally {
-          setIsLoading(false);
+          setIsLoading(false); // Only set false if refinePreferences itself fails
       }
   };
 

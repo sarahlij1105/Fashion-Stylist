@@ -1,12 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
-import { UserProfile, Preferences, StyleAnalysisResult, FashionPurpose } from "../types";
+import { UserProfile, Preferences, StyleAnalysisResult } from "../types";
 import { fashionVocabularyDatabase } from "./fashionVocabulary";
 import { fashionStyleLibrary } from "./fashionStyleLibrary";
 import { generateContentWithRetry } from "./geminiService";
 import { cacheManager } from "./cacheService";
-
-// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
-
 
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
   const matches = dataUrl.match(/^data:(.+);base64,(.+)$/);

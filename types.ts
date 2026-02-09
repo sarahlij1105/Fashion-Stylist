@@ -1,34 +1,25 @@
 export enum AppStep {
   GOAL_SELECTION = 'GOAL_SELECTION',
-  PROFILE_MANUAL = 'PROFILE_MANUAL', // New step for manual profile entry (no photo)
+  PROFILE_MANUAL = 'PROFILE_MANUAL',
   UPLOAD_PHOTO = 'UPLOAD_PHOTO',
   ITEM_TYPE = 'ITEM_TYPE',
-  CONFIRMATION = 'CONFIRMATION', // New step for verifying AI analysis
-  PREFERENCES_DASHBOARD = 'PREFERENCES_DASHBOARD', // Replaces OCCASION, STYLE, COLOR, PRICE_RANGE
-  OCCASION = 'OCCASION', // Deprecated but kept for type safety if needed
-  STYLE = 'STYLE', // Deprecated
-  COLOR = 'COLOR', // Deprecated
-  PRICE_RANGE = 'PRICE_RANGE', // Deprecated
-  // DELIVERY step removed
+  CONFIRMATION = 'CONFIRMATION',
+  PREFERENCES_DASHBOARD = 'PREFERENCES_DASHBOARD',
+  OCCASION = 'OCCASION',
+  STYLE = 'STYLE',
+  COLOR = 'COLOR',
+  PRICE_RANGE = 'PRICE_RANGE',
   IDEAL_STYLE = 'IDEAL_STYLE',
   SEARCHING = 'SEARCHING',
   RESULTS = 'RESULTS',
-  // New Card 1 Flow Steps
   CARD1_DETAILS = 'CARD1_DETAILS',
-  CARD1_PROFILE = 'CARD1_PROFILE',
-  CARD1_CONFIRM = 'CARD1_CONFIRM',
-  // New Card 2 Flow Steps
   CARD2_DETAILS = 'CARD2_DETAILS',
   CARD2_RECOMMENDATION = 'CARD2_RECOMMENDATION',
-  // Profile Flow
   PROFILE_SETUP = 'PROFILE_SETUP',
   PROFILE_VIEW = 'PROFILE_VIEW',
-  // Chat Refinement Flow (Card 1)
   CARD1_CHAT = 'CARD1_CHAT',
-  // Card 3 Flow Steps
   CARD3_OCCASION = 'CARD3_OCCASION',
   CARD3_CHAT = 'CARD3_CHAT',
-  // Search History
   SEARCH_HISTORY = 'SEARCH_HISTORY',
 }
 
@@ -97,9 +88,7 @@ export interface Preferences {
   colors: string;
   priceRange: string;
   location: string;
-  // deadline removed
-  // ignoreShippingLogic removed
-  itemType: string; // Comma separated if multiple
+  itemType: string;
 }
 
 export interface OutfitComponent {

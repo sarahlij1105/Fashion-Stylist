@@ -1,9 +1,5 @@
-
-import { GoogleGenAI } from "@google/genai";
 import { UserProfile, Preferences, StyleAnalysisResult } from "../types";
 import { generateContentWithRetry } from "./geminiService";
-
-// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
 
 /**
@@ -144,6 +140,19 @@ export const runCategoryMicroAgent = async (
         return url;
     };
 
+    const fetchWithRetry = async (url: string, options: RequestInit, retries = 2, delay = 1500): Promise<Response> => {
+        try {
+            return await fetch(url, options);
+        } catch (e: any) {
+            if (retries > 0) {
+                console.warn(`[${category}] Fetch failed (${e.message}). Retrying in ${delay}ms... (${retries} left)`);
+                await new Promise(r => setTimeout(r, delay));
+                return fetchWithRetry(url, options, retries - 1, delay * 2);
+            }
+            throw e;
+        }
+    };
+
     const performSearch = async (q: string) => {
         try {
             const serpApiKey = process.env.SERPAPI_KEY;
@@ -152,16 +161,9 @@ export const runCategoryMicroAgent = async (
                 return [];
             }
 
-            // Use a cors proxy or backend if needed, but for now we try direct fetch if allowed or via proxy
-            // SerpApi usually requires backend, but we can try via our local proxy if we set it up,
-            // or just use the direct URL if we accept exposing key (not recommended for prod but ok for prototype)
-            // Ideally, we should route this through /api/proxy/serpapi to hide the key.
-            // For this implementation, I will assume we can call it directly for now or use a proxy.
-            // Let's use the existing /api/proxy to fetch the SerpApi JSON to avoid CORS issues.
-            
             const serpUrl = `https://serpapi.com/search.json?q=${encodeURIComponent(q)}&engine=google_shopping&api_key=${serpApiKey}&num=15`;
             
-            const res = await fetch('/api/proxy', {
+            const res = await fetchWithRetry('/api/proxy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: serpUrl })
@@ -173,10 +175,6 @@ export const runCategoryMicroAgent = async (
             }
 
             const data = await res.json();
-            // The proxy returns { content: string, ... }. We need to parse the content if it's stringified JSON.
-            // Wait, our proxy returns cleaned HTML text usually. 
-            // If we use the proxy for JSON, it might try to "clean" it.
-            // We might need a dedicated endpoint or just try to parse `data.content`.
             
             let searchResults: any = {};
             try {
@@ -190,7 +188,7 @@ export const runCategoryMicroAgent = async (
             
             return shoppingResults.map((item: any) => ({
                 name: item.title,
-                purchaseUrl: cleanSerpUrl(item.link || item.product_link), // SerpApi provides direct link or google link
+                purchaseUrl: cleanSerpUrl(item.link || item.product_link),
                 snippet: item.snippet || item.source,
                 price: item.price,
                 image: item.thumbnail,
@@ -267,11 +265,11 @@ export const runCategoryMicroAgent = async (
                 let fetchSource = "snippet";
 
                 try {
-                    const res = await fetch('/api/proxy', {
+                    const res = await fetchWithRetry('/api/proxy', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ url: candidate.purchaseUrl })
-                    });
+                    }, 1, 1000);
                     
                     if (res.ok) {
                         const data = await res.json();

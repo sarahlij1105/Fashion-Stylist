@@ -1,6 +1,6 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { UserProfile, Preferences, RecommendationItem, StylistResponse, OutfitComponent, FashionPurpose, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, ProfessionalStylistResponse, StylistOutfit } from "../types";
+import { GoogleGenAI } from "@google/genai";
+import { UserProfile, Preferences, RecommendationItem, StylistResponse, FashionPurpose, StyleAnalysisResult, SearchCriteria, RefinementChatMessage, ProfessionalStylistResponse, StylistOutfit } from "../types";
 import { masterStyleGuide } from "./masterStyleGuide";
 import { runCategoryMicroAgent } from "./agent2_procurement_temp";
 import { runVerificationStep, runStylistScoringStep, runOutfitComposerStep } from "./agent3_curator_temp";
@@ -49,10 +49,12 @@ export const generateContentWithRetry = async (
     } catch (error: any) {
         const isTransient = error.status === 503 || error.code === 503 || 
                            error.status === 429 || error.code === 429 ||
-                           (error.message && error.message.includes("overloaded"));
+                           (error.message && error.message.includes("overloaded")) ||
+                           (error.message && error.message.includes("Failed to fetch")) ||
+                           (error instanceof TypeError && error.message.includes("fetch"));
         
         if (isTransient && retries > 0) {
-            console.warn(`[Gemini] ${model} overloaded/rate-limited. Retrying in ${delay}ms... (${retries} left)`);
+            console.warn(`[Gemini] ${model} error: ${error.message}. Retrying in ${delay}ms... (${retries} left)`);
             await new Promise(res => setTimeout(res, delay));
             return generateContentWithRetry(model, params, retries - 1, delay * 2);
         }
@@ -466,6 +468,120 @@ export const analyzeUserPhoto = async (dataUrl: string, purpose: FashionPurpose,
   }
 };
 
+// --- STYLE GUIDE RULE EXTRACTION (lightweight, no AI call) ---
+/**
+ * Extracts a compact, relevant subset of the masterStyleGuide based on user input keywords.
+ * This is a pure in-memory lookup — no network or AI call — so it adds zero latency.
+ * Returns a concise string of occasion-specific rules, group coordination rules,
+ * and cultural rules that the occasion planner should respect.
+ */
+function getRelevantStyleRules(userInput: string): string {
+    const input = userInput.toLowerCase();
+    const guide = masterStyleGuide?.master_style_guide as any;
+    if (!guide) return '';
+
+    const rules: string[] = [];
+
+    // --- 1. Detect occasion keywords and extract occasion_specific_rules ---
+    const occasionRules = guide.occasion_specific_rules || {};
+    const occasionKeywordMap: Record<string, string[]> = {
+        graduation: ['graduation', 'commencement', 'convocation', 'graduating'],
+        weddings: ['wedding', 'bridal', 'nuptial', 'matrimony', 'reception'],
+        holidays: ['christmas', 'new year', 'valentine', 'halloween', 'thanksgiving', 'easter', 'st patrick', 'holiday party', 'fourth of july', 'independence day'],
+        date_night: ['date night', 'date', 'romantic dinner', 'anniversary dinner'],
+        professional_workplace: ['work', 'office', 'business', 'corporate', 'workplace', 'meeting', 'presentation', 'conference'],
+        job_interview: ['interview', 'job interview'],
+        fitness_activities: ['gym', 'yoga', 'hiking', 'running', 'workout', 'fitness', 'pilates'],
+        parties: ['party', 'cocktail party', 'house party', 'birthday party', 'nightclub', 'club'],
+        music_festival: ['festival', 'concert', 'music festival', 'coachella'],
+        casual_social: ['brunch', 'lunch', 'coffee', 'casual', 'farmers market', 'shopping', 'errands'],
+    };
+
+    const matchedOccasions: string[] = [];
+    for (const [key, keywords] of Object.entries(occasionKeywordMap)) {
+        if (keywords.some(kw => input.includes(kw))) {
+            matchedOccasions.push(key);
+            if (occasionRules[key]) {
+                rules.push(`[Occasion Rules: ${key}]\n${JSON.stringify(occasionRules[key], null, 0)}`);
+            }
+        }
+    }
+
+    // --- 2. Detect role keywords → extract group coordination rules ---
+    const supportingRoleKeywords = ['mom', 'mother', 'dad', 'father', 'parent', 'guest', 'family', 'friend', 'attendee', 'companion', 'grandmother', 'grandfather', 'aunt', 'uncle', 'sister', 'brother', 'daughter', 'son'];
+    const primaryRoleKeywords = ['bride', 'groom', 'graduate', 'honoree', 'birthday person', 'host'];
+    const isSupportingRole = supportingRoleKeywords.some(kw => input.includes(kw));
+    const isPrimaryRole = primaryRoleKeywords.some(kw => input.includes(kw));
+
+    const groupCoord = guide.group_coordination || {};
+
+    if (isSupportingRole || isPrimaryRole) {
+        // Always include hierarchy principle and no-upstaging rule
+        if (groupCoord.hierarchy_principle) {
+            rules.push(`[Group Hierarchy]\n${JSON.stringify(groupCoord.hierarchy_principle, null, 0)}`);
+        }
+        if (groupCoord.no_upstaging_rule) {
+            rules.push(`[No-Upstaging Rule]\n${JSON.stringify(groupCoord.no_upstaging_rule, null, 0)}`);
+        }
+        if (groupCoord.complementary_anchor_strategy) {
+            rules.push(`[Complementary Anchor Strategy]\n${JSON.stringify(groupCoord.complementary_anchor_strategy, null, 0)}`);
+        }
+        // Event-specific group rules
+        const eventGroupRules = groupCoord.event_specific_group_rules || {};
+        for (const occ of matchedOccasions) {
+            // Map occasion key to group rule key (e.g. "weddings" → "wedding")
+            const groupKey = occ.replace(/s$/, '');
+            if (eventGroupRules[groupKey]) {
+                rules.push(`[Group Rules: ${groupKey}]\n${JSON.stringify(eventGroupRules[groupKey], null, 0)}`);
+            }
+            if (eventGroupRules[occ]) {
+                rules.push(`[Group Rules: ${occ}]\n${JSON.stringify(eventGroupRules[occ], null, 0)}`);
+            }
+        }
+    }
+
+    // --- 3. Detect cultural keywords → extract cultural rules ---
+    const culturalSensitivity = guide.cultural_sensitivity || {};
+    const cultureKeywordMap: Record<string, string[]> = {
+        color_symbolism_by_culture: ['chinese', 'indian', 'japanese', 'korean', 'african', 'middle eastern', 'latin', 'mexican', 'western', 'muslim', 'jewish', 'hindu', 'buddhist', 'vietnamese', 'thai', 'filipino', 'indonesian', 'brazilian'],
+        religious_dress_codes: ['church', 'mosque', 'temple', 'synagogue', 'religious', 'catholic', 'muslim', 'jewish', 'hindu', 'sikh', 'orthodox', 'buddhist'],
+    };
+
+    for (const [section, keywords] of Object.entries(cultureKeywordMap)) {
+        if (keywords.some(kw => input.includes(kw))) {
+            const sectionData = culturalSensitivity[section];
+            if (sectionData) {
+                // Only extract the matching sub-culture, not the whole section
+                if (typeof sectionData === 'object') {
+                    for (const [subKey, subVal] of Object.entries(sectionData)) {
+                        const subKeyLower = subKey.toLowerCase().replace(/_/g, ' ');
+                        if (keywords.some(kw => subKeyLower.includes(kw) || input.includes(subKeyLower))) {
+                            rules.push(`[Cultural: ${subKey}]\n${JSON.stringify(subVal, null, 0)}`);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 4. If a supporting role is detected at a specific occasion, add a compact summary ---
+    if (isSupportingRole && matchedOccasions.length > 0) {
+        const compactWarning = matchedOccasions.map(occ => {
+            if (occ === 'graduation') return 'GRADUATION: Supporting person (parent/family) should AVOID white/cream (graduate wears white). Wear deep anchor colors (navy, burgundy, forest green, charcoal) to make the graduate stand out in photos.';
+            if (occ === 'weddings') return 'WEDDING: Guests/family should NEVER wear white/ivory/cream. Avoid red at Asian weddings (bride\'s color). Avoid bridesmaid dress colors. Safe: navy, burgundy, emerald, dusty rose, lavender, sage.';
+            return '';
+        }).filter(Boolean);
+        if (compactWarning.length > 0) {
+            rules.push(`[CRITICAL AVOIDANCE RULES]\n${compactWarning.join('\n')}`);
+        }
+    }
+
+    if (rules.length === 0) return '';
+    const result = rules.join('\n\n');
+    console.log(`[Style Guide Lookup] Extracted ${rules.length} rule sections (${result.length} chars) for input: "${userInput.substring(0, 50)}..."`);
+    return result;
+}
+
 // --- AGENT 2B: STYLIST (Card 2 Recommendation) ---
 /**
  * OCCASION-BASED OUTFIT PLANNER (Gemini 3 Flash)
@@ -524,12 +640,19 @@ export const generateOccasionPlan = async (
     }
     console.log(`[Occasion Planner] Cache MISS for "${normalizedInput}" (${profile.gender})`);
 
+    // --- STYLE GUIDE LOOKUP (pure in-memory, zero latency) ---
+    const styleGuideRules = getRelevantStyleRules(userInput);
+    const styleGuideSection = styleGuideRules
+        ? `\n**STYLE GUIDE RULES (MUST FOLLOW — these override your defaults):**\nThe following rules come from our master style guide. You MUST respect these when recommending colors, styles, and items. Pay special attention to AVOIDANCE rules — recommending a forbidden color/style is a critical error.\n\n${styleGuideRules}\n`
+        : '';
+
     const prompt = `
 You are a smart fashion planning assistant. A user typed a free-text request. Your job is to:
 1. **Extract** any specific criteria the user already mentioned (occasion, items, styles, colors, features).
 2. **Extract contextual signals** — culture, role, season/weather, venue, formality, time of day, location, activity level, dress code, companions, body considerations, and any other relevant detail the user mentioned or strongly implied.
-3. **Recommend** suitable values for any criteria the user did NOT mention. Use the extracted context to make smarter recommendations (e.g., a Chinese wedding guest needs very different clothing than a Mexican beach wedding).
-4. **Suggest additional items** the user might need for a complete outfit.
+3. **Check the style guide rules** (if provided) to avoid recommending forbidden colors, styles, or items for this occasion and role.
+4. **Recommend** suitable values for any criteria the user did NOT mention. Use the extracted context AND the style guide rules to make smarter recommendations.
+5. **Suggest additional items** the user might need for a complete outfit.
 
 **User Input:** "${userInput}"
 **User Gender:** ${profile.gender || 'Not specified'} (IMPORTANT: all recommendations must be gender-appropriate for a ${profile.gender || 'Not specified'} person)
@@ -537,7 +660,7 @@ You are a smart fashion planning assistant. A user typed a free-text request. Yo
 
 **Available Clothing Categories:** ${categoryNames}
 **Available Style Vibes:** ${styleLibrarySummary}
-
+${styleGuideSection}
 **STEP 1 — EXTRACT CONTEXT (do this FIRST before anything else):**
 Read the user's input carefully and extract ALL contextual signals. These are NOT separate questions to ask — infer them from what the user wrote. Only include fields where the user explicitly stated or strongly implied a value. Examples:
 - "Chinese wedding" → culture: "Chinese"
@@ -557,10 +680,12 @@ Read the user's input carefully and extract ALL contextual signals. These are NO
 - **colors**: If the user mentions colors (e.g., "red", "navy", "pastel"), extract them. If not mentioned, extracted.colors = false.
 - **features**: If the user mentions fabric, fit, or detail preferences (e.g., "silk", "fitted", "flowy"), extract them. If not mentioned, extracted.features = false.
 
-**STEP 3 — USE CONTEXT FOR SMARTER RECOMMENDATIONS:**
-When recommending styles, colors, features, and items for non-extracted fields, USE the extracted context heavily:
-- **Culture**: Chinese weddings → red/gold tones, qipao-inspired, avoid all-white/all-black. Indian weddings → rich jewel tones, embroidery, saree/lehenga consideration. Mexican weddings → vibrant colors, floral patterns.
-- **Role**: Bride → white/ivory, show-stopping silhouette. Bridesmaid → coordinate with wedding party. Guest → elegant but not upstaging. Host → polished and approachable.
+**STEP 3 — USE CONTEXT + STYLE GUIDE FOR SMARTER RECOMMENDATIONS:**
+When recommending styles, colors, features, and items for non-extracted fields, USE the extracted context AND the STYLE GUIDE RULES (if provided above) heavily:
+- **CRITICAL**: If the Style Guide Rules include AVOIDANCE rules (e.g., "AVOID white", "NEVER wear red"), you MUST NOT recommend those colors/styles. This is the highest priority — even if you think the color would look nice, if the guide says to avoid it for this role/occasion, do NOT include it.
+- **Role-aware color selection**: If the user is NOT the primary person at an event (e.g., they are a parent/guest at graduation, a guest at a wedding), check the no-upstaging and group hierarchy rules. The primary person (graduate, bride) gets the spotlight colors (white, bold). Supporting roles should wear complementary deep/anchor colors.
+- **Culture**: Chinese weddings → red/gold tones, qipao-inspired, avoid all-white/all-black. Indian weddings → rich jewel tones, embroidery, saree/lehenga consideration. Mexican weddings → vibrant colors, floral patterns. Check the style guide cultural rules if provided.
+- **Role**: Bride → white/ivory, show-stopping silhouette. Bridesmaid → coordinate with wedding party. Guest → elegant but not upstaging. Host → polished and approachable. Parent/family → deep anchor colors, complementary.
 - **Season/Weather**: Summer → lightweight, breathable fabrics, lighter colors. Winter → layered, heavier fabrics, rich tones. Rainy → water-resistant, practical footwear.
 - **Venue**: Outdoor garden → flowy, nature-inspired. Rooftop/lounge → sleek, modern. Beach → casual, sand-friendly shoes. Office → structured, professional.
 - **Formality**: Black tie → floor-length, luxury fabrics. Semi-formal → cocktail length, refined. Casual → comfortable yet put-together.
@@ -1308,7 +1433,9 @@ export const searchAndRecommend = async (
     const startPipeline = performance.now();
     
     // We Map over categories and launch a self-contained "Micro-Pipeline" for each
+    // Each pipeline is wrapped in try/catch so one category failure doesn't crash the whole search
     const pipelinePromises = categories.map(async (category) => {
+      try {
         const catStart = performance.now();
         const catTimings: string[] = [];
         
@@ -1372,6 +1499,15 @@ export const searchAndRecommend = async (
             logs,
             timing: `Pipeline (${category}): ${totalCatDuration}ms`
         };
+      } catch (catError: any) {
+        console.error(`[${category}] Pipeline FAILED:`, catError);
+        return {
+            category,
+            scoredItems: [],
+            logs: [`[${category}] Pipeline failed: ${catError.message}`],
+            timing: `Pipeline (${category}): FAILED`
+        };
+      }
     });
 
     // Wait for all pipelines to complete and fill the pool

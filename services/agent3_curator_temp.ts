@@ -1,9 +1,5 @@
-
-import { GoogleGenAI } from "@google/genai";
-import { UserProfile, Preferences, StylistResponse, FashionPurpose, StyleAnalysisResult } from "../types";
+import { UserProfile, Preferences, StylistResponse, StyleAnalysisResult } from "../types";
 import { generateContentWithRetry } from "./geminiService";
-
-// REMOVED LOCAL AI INITIALIZATION - using geminiService's instance via retry wrapper
 
 
 // --- STEP 1: VERIFICATION (HEURISTIC TYPESCRIPT ENGINE) ---
@@ -336,18 +332,4 @@ export const runStylistScoringStep = async (
         console.error("Composer Agent Failed:", e);
         return { reflectionNotes: "Composer Error", recommendations: [] };
     }
-};
-
-// --- LEGACY ORCHESTRATOR FOR BACKWARD COMPAT ---
-export const runCuratorAgent = async (
-    profile: UserProfile, 
-    preferences: Preferences, 
-    procurementReport: string,
-    directorGuidance: string,
-    imageParts: any[],
-    styleAnalysis?: StyleAnalysisResult
-): Promise<StylistResponse> => {
-    const verificationResult = await runVerificationStep(procurementReport, directorGuidance, preferences, profile);
-    const scoringResult = await runStylistScoringStep(verificationResult, preferences, styleAnalysis);
-    return await runOutfitComposerStep(scoringResult, preferences, profile, imageParts);
 };
