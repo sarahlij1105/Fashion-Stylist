@@ -99,23 +99,25 @@ interface NavigationButtonsProps {
 }
 
 const NavigationButtons: React.FC<NavigationButtonsProps> = ({ onContinue, disabled = false, showBack = true, onBack, continueLabel = "Continue" }) => (
-  <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-50">
-    <div className="max-w-md mx-auto flex items-center justify-between px-4">
+  <div className="fixed bottom-0 inset-x-0 z-50 pointer-events-none">
+    <div className="max-w-md mx-auto pointer-events-auto bg-[#FFFBF8] border-t border-rose-100/50 p-4 pb-8">
+      <div className="flex items-center justify-between px-4">
        {showBack && (
           <button 
             onClick={onBack}
-            className="w-12 h-12 flex items-center justify-center border border-stone-200 rounded-xl hover:bg-stone-50 transition-colors"
+            className="w-12 h-12 flex items-center justify-center border border-rose-200 rounded-xl hover:bg-rose-50 transition-colors"
           >
-            <ChevronLeft size={24} className="text-stone-600" />
+            <ChevronLeft size={24} className="text-[#8B6F7D]" />
           </button>
        )}
        <button 
          onClick={onContinue}
          disabled={disabled}
-         className={`flex-1 ${showBack ? 'ml-4' : ''} bg-stone-950 text-white font-medium h-12 rounded-xl transition-all shadow-lg shadow-stone-200 ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-stone-800'}`}
+         className={`flex-1 ${showBack ? 'ml-4' : ''} bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white font-medium h-12 rounded-xl transition-all shadow-md hover:shadow-lg ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
        >
          {continueLabel}
        </button>
+      </div>
     </div>
   </div>
 );
@@ -133,7 +135,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ currentStep }) => {
       {WIZARD_STEPS.slice(1).map((s, idx) => { 
            const isActive = idx <= (currentIndex - 1); 
            return (
-             <div key={idx} className={`h-1 flex-1 rounded-full ${isActive ? 'bg-stone-900' : 'bg-stone-200'}`} />
+             <div key={idx} className={`h-1 flex-1 rounded-full ${isActive ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78]' : 'bg-rose-100'}`} />
            );
       })}
     </div>
@@ -789,7 +791,7 @@ export default function App() {
       };
 
       return (
-        <div className="max-w-md mx-auto px-6 pt-8 animate-fade-in pb-32">
+        <div className="max-w-md mx-auto px-6 pt-8 animate-fade-in pb-32 bg-[#FFFBF8] min-h-screen">
           {/* Header */}
           <h1 className="text-2xl font-bold font-sans text-stone-900 leading-tight mb-8">
             Please provide us up to<br />3 example photos
@@ -798,7 +800,7 @@ export default function App() {
           {/* Photo Upload - 2 column grid */}
           <div className="grid grid-cols-2 gap-3 mb-10">
              {profile.idealStyleImages.map((img, idx) => (
-                 <div key={idx} className="relative aspect-[3/4] bg-stone-100 rounded-2xl overflow-hidden border border-stone-200">
+                 <div key={idx} className="relative aspect-[3/4] bg-rose-50 rounded-2xl overflow-hidden border border-rose-200">
                      <img src={img} alt={`Example ${idx+1}`} className="w-full h-full object-cover" />
                      <button 
                         onClick={() => removeIdealImage(idx)}
@@ -810,7 +812,7 @@ export default function App() {
              ))}
              
              {profile.idealStyleImages.length < 3 && (
-                 <label className="aspect-[3/4] bg-white border-2 border-dashed border-stone-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-stone-50 hover:border-stone-400 transition-all text-stone-300 hover:text-stone-500">
+                 <label className="aspect-[3/4] bg-white border-2 border-dashed border-rose-300 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-rose-50 hover:border-[#C67B88] transition-all text-rose-300 hover:text-[#C67B88]">
                      <Plus size={32} />
                      <input 
                         type="file" 
@@ -825,10 +827,10 @@ export default function App() {
 
           {/* Budget Section */}
           <div className="mb-8">
-            <p className="text-sm text-stone-400 mb-2">What's your budget?</p>
+            <p className="text-sm text-[#8B6F7D] mb-2">What's your budget?</p>
             <div className="flex items-center gap-3">
-              <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
-                <span className="text-stone-400 font-medium mr-2">$</span>
+              <div className="flex-1 flex items-center border-2 border-rose-200/50 rounded-xl px-4 py-3.5 bg-white/50 focus-within:border-[#C67B88]/50 focus-within:bg-white transition-all">
+                <span className="text-[#C67B88] font-medium mr-2">$</span>
                 <input 
                   type="number"
                   value={minPrice}
@@ -837,9 +839,9 @@ export default function App() {
                   placeholder="Min"
                 />
               </div>
-              <span className="text-stone-400 text-sm">to</span>
-              <div className="flex-1 flex items-center border border-stone-200 rounded-xl px-4 py-3.5 bg-white">
-                <span className="text-stone-400 font-medium mr-2">$</span>
+              <span className="text-[#8B6F7D] text-sm">to</span>
+              <div className="flex-1 flex items-center border-2 border-rose-200/50 rounded-xl px-4 py-3.5 bg-white/50 focus-within:border-[#C67B88]/50 focus-within:bg-white transition-all">
+                <span className="text-[#C67B88] font-medium mr-2">$</span>
                 <input 
                   type="number"
                   value={maxPrice}
@@ -870,18 +872,23 @@ export default function App() {
       // chatContainerRef and auto-scroll useEffect are hoisted to App top level
 
       return (
-          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-[#FFFBF8]">
               {/* Header */}
-              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+              <div className="px-4 pt-4 pb-3 border-b border-rose-100/50 bg-[#FFFBF8] backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.CARD1_DETAILS)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
-                          <ChevronLeft size={20} className="text-stone-600" />
+                      <button onClick={() => setStep(AppStep.CARD1_DETAILS)} className="p-1.5 hover:bg-rose-50 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-[#8B6F7D]" />
                       </button>
-                      <div className="text-center">
-                          <h1 className="text-sm font-bold text-stone-900">Fashion Assistant</h1>
-                          <p className="text-[10px] text-stone-400">Let me know if you need any changes</p>
+                      <div className="text-center flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-[#C67B88]/10 to-[#B56A78]/10 border border-[#C67B88]/10">
+                              <Sparkles size={12} className="text-[#C67B88]" />
+                          </span>
+                          <div>
+                              <h1 className="text-sm font-bold text-stone-900">Fashion Assistant</h1>
+                              <p className="text-[10px] text-[#8B6F7D]">Let me know if you need any changes</p>
+                          </div>
                       </div>
-                      <div className="w-8" /> {/* Spacer */}
+                      <div className="w-8" />
                   </div>
               </div>
 
@@ -911,10 +918,10 @@ export default function App() {
                       if (isFirstAssistant) {
                           return (
                               <div key={idx} className="flex justify-start">
-                                  <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                  <div className="max-w-[90%] bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
                                       <div className="flex items-center gap-2 mb-2">
-                                          <Sparkles size={16} className="text-emerald-600" />
-                                          <span className="text-sm font-bold text-emerald-700">Style Analysis</span>
+                                          <Sparkles size={16} className="text-[#C67B88]" />
+                                          <span className="text-sm font-bold text-[#C67B88]">Style Analysis</span>
                                       </div>
                                       <p className="text-sm text-stone-700 mb-4">Here's what we detected from your photos:</p>
                                       
@@ -923,7 +930,7 @@ export default function App() {
                                               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Detected Items</p>
                                               <div className="flex flex-wrap gap-2">
                                                   {searchCriteria.includedItems.map((item, i) => (
-                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
                                                           {itemCatIcon(item)} {item}
                                                       </span>
                                                   ))}
@@ -936,7 +943,7 @@ export default function App() {
                                               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
                                               <div className="flex flex-wrap gap-2">
                                                   {searchCriteria.style.split(',').map((s, i) => (
-                                                      <span key={i} className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full text-xs font-bold text-amber-700">
+                                                      <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-xs font-bold text-rose-700">
                                                           {s.trim()}
                                                       </span>
                                                   ))}
@@ -949,7 +956,7 @@ export default function App() {
                                               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
                                               <div className="flex flex-wrap gap-2">
                                                   {searchCriteria.colors.map((c, i) => (
-                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
                                                           <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
                                                       </span>
                                                   ))}
@@ -976,8 +983,8 @@ export default function App() {
                           <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                               <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
                                   msg.role === 'user' 
-                                      ? 'bg-stone-900 text-white rounded-br-md' 
-                                      : 'bg-stone-100 text-stone-800 rounded-bl-md'
+                                      ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white rounded-br-md shadow-sm' 
+                                      : 'bg-white border border-rose-100/30 text-stone-800 rounded-bl-md shadow-sm'
                               }`}>
                                   {/* Render message with basic formatting */}
                                   {msg.content.split('\n').map((line, li) => (
@@ -1041,7 +1048,7 @@ export default function App() {
               </div>
 
               {/* Input Area */}
-              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+              <div className="border-t border-rose-100/50 bg-[#FFFBF8] px-4 py-3 pb-6">
                   {/* Quick suggestion pills */}
                   <div className="flex gap-2 overflow-x-auto mb-3 pb-1 scrollbar-hide">
                       {['Add a skirt', 'No polyester', 'Date night', 'Under $150', 'Navy blue'].map(suggestion => (
@@ -1064,7 +1071,7 @@ export default function App() {
                           onChange={(e) => setChatInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleChatSend()}
                           placeholder="Type your response..."
-                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          className="flex-1 px-4 py-3 bg-white/50 border-2 border-rose-200/50 rounded-xl text-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all"
                           disabled={isChatLoading}
                       />
                       <button
@@ -1072,8 +1079,8 @@ export default function App() {
                           disabled={!chatInput.trim() || isChatLoading}
                           className={`p-3 rounded-xl transition-all ${
                               chatInput.trim() && !isChatLoading
-                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-md' 
-                                  : 'bg-stone-100 text-stone-300'
+                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg' 
+                                  : 'bg-pink-50 text-rose-300'
                           }`}
                       >
                           <Send size={18} />
@@ -1109,16 +1116,16 @@ export default function App() {
     ];
 
     return (
-    <div className="max-w-md mx-auto px-6 pt-10 animate-fade-in pb-32">
+    <div className="max-w-md mx-auto px-6 pt-10 animate-fade-in pb-32 bg-[#FFFBF8] min-h-screen">
        {/* Hero Icon */}
        <div className="flex justify-center mb-6">
-           <div className="w-14 h-14 rounded-full bg-rose-50 flex items-center justify-center">
-               <Sparkles size={24} className="text-rose-400" />
+           <div className="w-14 h-14 rounded-full bg-gradient-to-br from-pink-100 to-rose-100 border border-rose-200/50 flex items-center justify-center shadow-sm">
+               <Sparkles size={24} className="text-[#C67B88]" />
            </div>
        </div>
 
        <h1 className="text-3xl font-bold font-serif text-stone-900 mb-1.5 text-center leading-tight">What are you looking for?</h1>
-       <p className="text-sm text-stone-400 mb-7 text-center">Let's create the perfect outfit for your special moment</p>
+       <p className="text-sm text-[#8B6F7D] mb-7 text-center">Let's create the perfect outfit for your special moment</p>
 
        {/* Search Box */}
        <div className="relative mb-6">
@@ -1127,7 +1134,7 @@ export default function App() {
              value={searchQuery}
              onChange={(e) => setSearchQuery(e.target.value)}
              placeholder="e.g. find me an outfit for a date night on Valentin..."
-             className="w-full p-4 pr-14 bg-white border border-stone-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300 transition-all text-sm"
+             className="w-full p-4 pr-14 bg-white/80 border-2 border-rose-200/50 rounded-2xl shadow-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all text-sm"
              onKeyDown={(e) => e.key === 'Enter' && handleSmartEntry()}
            />
            <button 
@@ -1135,8 +1142,8 @@ export default function App() {
              disabled={!searchQuery.trim()}
              className={`absolute right-3 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${
                  searchQuery.trim()
-                     ? 'bg-rose-400 text-white hover:bg-rose-500 shadow-sm'
-                     : 'bg-stone-100 text-stone-300'
+                     ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
+                     : 'bg-pink-50 text-rose-300'
              }`}
            >
              <Send size={18} />
@@ -1145,7 +1152,7 @@ export default function App() {
 
        {/* Quick Searches */}
        <div className="mb-6">
-           <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-3">Quick Searches</p>
+           <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-widest mb-3">Quick Searches</p>
            <div className="flex flex-wrap gap-2">
                {quickSearches.map((qs) => (
                    <button
@@ -1154,7 +1161,7 @@ export default function App() {
                            setSearchQuery(qs.label);
                            handleCard3GoToChat(qs.label);
                        }}
-                       className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-stone-200 rounded-full text-sm font-medium text-stone-700 hover:border-stone-400 hover:shadow-sm transition-all"
+                       className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-rose-200 rounded-full text-sm font-medium text-stone-700 hover:border-[#C67B88] hover:shadow-sm transition-all"
                    >
                        <span className="text-sm">{qs.icon}</span> {qs.label}
                    </button>
@@ -1163,18 +1170,18 @@ export default function App() {
        </div>
 
        {/* Style Tip */}
-       <div className="bg-rose-50 rounded-2xl p-4 mb-8">
+       <div className="bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl p-4 mb-8">
            <div className="flex items-center gap-2 mb-1.5">
-               <Sparkles size={14} className="text-rose-400" />
-               <p className="text-xs font-bold text-rose-500">Style Tip</p>
+               <Sparkles size={14} className="text-[#C67B88]" />
+               <p className="text-xs font-bold text-[#C67B88]">Style Tip</p>
            </div>
-           <p className="text-xs text-stone-600 leading-relaxed">The more details you share about your occasion, the better we can tailor recommendations to match your needs!</p>
+           <p className="text-xs text-[#8B6F7D] leading-relaxed">The more details you share about your occasion, the better we can tailor recommendations to match your needs!</p>
        </div>
 
        {/* Divider */}
        <div className="relative mb-6">
-           <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-stone-200" /></div>
-           <div className="relative flex justify-center"><span className="bg-stone-50 px-4 text-xs text-stone-400">or if you already have an outfit/idea</span></div>
+           <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-rose-200/50" /></div>
+           <div className="relative flex justify-center"><span className="bg-[#FFFBF8] px-4 text-xs text-[#8B6F7D]">or if you already have an outfit/idea</span></div>
        </div>
 
        {/* Card 1 & Card 2 */}
@@ -1189,14 +1196,14 @@ export default function App() {
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD1_DETAILS);
              }}
-             className="flex flex-col items-start gap-3 p-4 bg-white border border-stone-200 rounded-2xl hover:border-stone-400 hover:shadow-md transition-all text-left"
+             className="flex flex-col items-start gap-3 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-left shadow-sm"
           >
-             <div className="w-10 h-10 bg-rose-50 text-rose-400 rounded-xl flex items-center justify-center">
+             <div className="w-10 h-10 bg-gradient-to-br from-pink-50 to-rose-50 text-[#C67B88] rounded-xl flex items-center justify-center border border-pink-100">
                  <Sparkles size={18} />
              </div>
              <div>
                  <h3 className="font-bold text-sm text-stone-900 mb-0.5">Shop me this style</h3>
-                 <p className="text-[11px] text-stone-400 leading-snug">Upload outfit photos to find similar pieces</p>
+                 <p className="text-[11px] text-[#8B6F7D] leading-snug">Upload outfit photos to find similar pieces</p>
              </div>
           </button>
 
@@ -1210,14 +1217,14 @@ export default function App() {
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD2_DETAILS);
              }}
-             className="flex flex-col items-start gap-3 p-4 bg-white border border-stone-200 rounded-2xl hover:border-stone-400 hover:shadow-md transition-all text-left"
+             className="flex flex-col items-start gap-3 p-4 bg-white border border-rose-200 rounded-2xl hover:border-[#C67B88] hover:shadow-md transition-all text-left shadow-sm"
           >
-             <div className="w-10 h-10 bg-stone-100 text-stone-500 rounded-xl flex items-center justify-center">
+             <div className="w-10 h-10 bg-gradient-to-br from-pink-50 to-rose-50 text-[#C67B88] rounded-xl flex items-center justify-center border border-pink-100">
                  <Layers size={18} />
              </div>
              <div>
                  <h3 className="font-bold text-sm text-stone-900 mb-0.5">Find items to match</h3>
-                 <p className="text-[11px] text-stone-400 leading-snug">Upload your outfit to discover matching pieces</p>
+                 <p className="text-[11px] text-[#8B6F7D] leading-snug">Upload your outfit to discover matching pieces</p>
              </div>
           </button>
        </div>
@@ -2148,7 +2155,7 @@ export default function App() {
       };
 
       return (
-          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32 bg-[#FFFBF8] min-h-screen">
               {/* Header */}
               <h1 className="text-2xl font-bold font-sans text-stone-900 leading-tight mb-5">
                   Please provide us a photo<br />of your current outfit
@@ -2156,7 +2163,7 @@ export default function App() {
 
               {/* Single Photo Upload - compact */}
               <div className="mb-5">
-                  <div className="relative aspect-[5/4] bg-white border-2 border-dashed border-stone-300 rounded-2xl overflow-hidden">
+                  <div className="relative aspect-[5/4] bg-white border-2 border-dashed border-rose-300 rounded-2xl overflow-hidden">
                       {profile.userImageBase64 ? (
                           <>
                               <img src={profile.userImageBase64} alt="Current Outfit" className="w-full h-full object-cover" />
@@ -2350,16 +2357,21 @@ export default function App() {
       }
 
       return (
-          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-[#FFFBF8]">
               {/* Header */}
-              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+              <div className="px-4 pt-4 pb-3 border-b border-rose-100/50 bg-[#FFFBF8] backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.CARD2_DETAILS)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
-                          <ChevronLeft size={20} className="text-stone-600" />
+                      <button onClick={() => setStep(AppStep.CARD2_DETAILS)} className="p-1.5 hover:bg-rose-50 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-[#8B6F7D]" />
                       </button>
-                      <div className="text-center">
-                          <h1 className="text-sm font-bold text-stone-900">Fashion Stylist</h1>
-                          <p className="text-[10px] text-stone-400">Review styling recommendations</p>
+                      <div className="text-center flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-[#C67B88]/10 to-[#B56A78]/10 border border-[#C67B88]/10">
+                              <Sparkles size={12} className="text-[#C67B88]" />
+                          </span>
+                          <div>
+                              <h1 className="text-sm font-bold text-stone-900">Fashion Stylist</h1>
+                              <p className="text-[10px] text-[#8B6F7D]">Review styling recommendations</p>
+                          </div>
                       </div>
                       <div className="w-8" />
                   </div>
@@ -2385,10 +2397,10 @@ export default function App() {
                   {/* Stylist Analysis Card (first message) */}
                   {analysisData && (
                       <div className="flex justify-start">
-                          <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                          <div className="max-w-[90%] bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
                               <div className="flex items-center gap-2 mb-2">
-                                  <Sparkles size={16} className="text-emerald-600" />
-                                  <span className="text-sm font-bold text-emerald-700">Stylist Analysis</span>
+                                  <Sparkles size={16} className="text-[#C67B88]" />
+                                  <span className="text-sm font-bold text-[#C67B88]">Stylist Analysis</span>
                               </div>
                               <p className="text-sm text-stone-700 mb-4">
                                   Your current outfit style is <strong>{analysisData.style}</strong>.
@@ -2399,12 +2411,12 @@ export default function App() {
                                   <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
                                   <div className="flex flex-wrap gap-2">
                                       {analysisData.mainColor && (
-                                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
                                               <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(analysisData.mainColor) }} /> {analysisData.mainColor}
                                           </span>
                                       )}
                                       {analysisData.otherColors?.map((c: string, i: number) => (
-                                          <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                          <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
                                               <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
                                           </span>
                                       ))}
@@ -2447,8 +2459,8 @@ export default function App() {
                       <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                           <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
                               msg.role === 'user' 
-                                  ? 'bg-stone-900 text-white rounded-br-md' 
-                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
+? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white rounded-br-md shadow-sm'
+                                  : 'bg-white border border-rose-100/30 text-stone-800 rounded-bl-md shadow-sm'
                           }`}>
                               {msg.content.split('\n').map((line, li) => (
                                   <p key={li} className={li > 0 ? 'mt-1' : ''}>
@@ -2480,8 +2492,8 @@ export default function App() {
                                           onClick={() => setSelectedOutfitIndex(idx)}
                                           className={`snap-start shrink-0 w-[80%] text-left rounded-2xl transition-all overflow-hidden ${
                                               isSelected 
-                                                  ? 'border-2 border-emerald-500 shadow-lg shadow-emerald-100' 
-                                                  : 'border border-stone-200 shadow-sm'
+                                                  ? 'border-2 border-[#C67B88] shadow-lg shadow-rose-100' 
+                                                  : 'border border-rose-200 shadow-sm'
                                           }`}
                                       >
                                           {/* Hero Image */}
@@ -2499,7 +2511,7 @@ export default function App() {
                                           )}
 
                                           {/* Card Header */}
-                                          <div className="px-4 py-3.5 bg-white border-b border-stone-100">
+                                          <div className="px-4 py-3.5 bg-white border-b border-rose-100/50">
                                               <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
                                           </div>
                                           
@@ -2576,7 +2588,7 @@ export default function App() {
               </div>
 
               {/* Input Area */}
-              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+              <div className="border-t border-rose-100/50 bg-[#FFFBF8] px-4 py-3 pb-6">
                   <div className="flex items-center gap-2">
                       <input
                           type="text"
@@ -2584,7 +2596,7 @@ export default function App() {
                           onChange={(e) => setChatInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleCard2ChatSend()}
                           placeholder="Type your response..."
-                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          className="flex-1 px-4 py-3 bg-white/50 border-2 border-rose-200/50 rounded-xl text-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all"
                           disabled={isChatLoading || isGeneratingRecs}
                       />
                       <button
@@ -2592,8 +2604,8 @@ export default function App() {
                           disabled={!chatInput.trim() || isChatLoading || isGeneratingRecs}
                           className={`p-3 rounded-xl transition-all ${
                               chatInput.trim() && !isChatLoading && !isGeneratingRecs
-                                  ? 'bg-stone-900 text-white hover:bg-stone-800 shadow-md' 
-                                  : 'bg-stone-100 text-stone-300'
+                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg' 
+                                  : 'bg-pink-50 text-rose-300'
                           }`}
                       >
                           <Send size={18} />
@@ -2604,7 +2616,7 @@ export default function App() {
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
                       <button
                           onClick={handleCard2Search}
-                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
                       >
                           <Search size={16} />
                           Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
@@ -2831,12 +2843,12 @@ export default function App() {
       const quickOccasions = ['Wedding Guest', 'Graduation Ceremony', 'Interview', 'Date Night', 'Work/Office', 'Party/Event'];
 
       return (
-          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-[#FFFBF8]">
               {/* Header */}
-              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+              <div className="px-4 pt-4 pb-3 border-b border-rose-100/50 bg-[#FFFBF8] backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
-                          <ChevronLeft size={20} className="text-stone-600" />
+                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-rose-50 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-[#8B6F7D]" />
                       </button>
                       <div className="text-center">
                           <h1 className="text-sm font-bold text-stone-900">New Outfit</h1>
@@ -2910,16 +2922,21 @@ export default function App() {
       }
 
       return (
-          <div className="max-w-md mx-auto flex flex-col h-screen bg-white">
+          <div className="max-w-md mx-auto flex flex-col h-screen bg-[#FFFBF8]">
               {/* Header */}
-              <div className="px-4 pt-4 pb-3 border-b border-stone-100 bg-white/95 backdrop-blur-sm sticky top-0 z-10">
+              <div className="px-4 pt-4 pb-3 border-b border-rose-100/50 bg-[#FFFBF8] backdrop-blur-sm sticky top-0 z-10">
                   <div className="flex items-center justify-between">
-                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-stone-100 rounded-lg transition-colors">
-                          <ChevronLeft size={20} className="text-stone-600" />
+                      <button onClick={() => setStep(AppStep.GOAL_SELECTION)} className="p-1.5 hover:bg-rose-50 rounded-lg transition-colors">
+                          <ChevronLeft size={20} className="text-[#8B6F7D]" />
                       </button>
-                      <div className="text-center">
-                          <h1 className="text-sm font-bold text-stone-900">Style Assistant</h1>
-                          <p className="text-[10px] text-stone-400">AI Recommendations</p>
+                      <div className="text-center flex items-center gap-2">
+                          <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gradient-to-br from-[#C67B88]/10 to-[#B56A78]/10 border border-[#C67B88]/10">
+                              <Sparkles size={12} className="text-[#C67B88]" />
+                          </span>
+                          <div>
+                              <h1 className="text-sm font-bold text-stone-900">Style Assistant</h1>
+                              <p className="text-[10px] text-[#8B6F7D]">AI Recommendations</p>
+                          </div>
                       </div>
                       <div className="w-8" />
                   </div>
@@ -2942,119 +2959,128 @@ export default function App() {
                       </div>
                   )}
 
-                  {/* Plan Analysis Card */}
-                  {planData && (() => {
-                      const ext = planData.extracted || {};
-                      const TagLabel = ({ extracted }: { extracted: boolean }) => (
-                          <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ml-2 ${
-                              extracted ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-50 text-amber-500'
-                          }`}>
-                              {extracted ? 'From you' : 'Suggested'}
-                          </span>
-                      );
-                      return (
-                      <div className="flex justify-start">
-                          <div className="max-w-[90%] bg-rose-50 border border-rose-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
-                              <div className="flex items-center gap-2 mb-2">
-                                  <Sparkles size={16} className="text-emerald-600" />
-                                  <span className="text-sm font-bold text-emerald-700">Your Outfit Plan</span>
+                  {/* All messages in chronological order */}
+                  {chatMessages.map((msg, idx) => {
+                      // System message with card3_plan → render inline analysis card
+                      if (msg.role === 'system' && msg.content.includes('card3_plan')) {
+                          let pd: any = null;
+                          try { pd = JSON.parse(msg.content); } catch {}
+                          if (!pd) return null;
+                          const ext = pd.extracted || {};
+                          const TagLabel = ({ extracted }: { extracted: boolean }) => (
+                              <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ml-2 ${
+                                  extracted ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-50 text-amber-500'
+                              }`}>
+                                  {extracted ? 'From you' : 'Suggested'}
+                              </span>
+                          );
+                          return (
+                              <div key={idx} className="flex justify-start">
+                                  <div className="max-w-[90%] bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                      <div className="flex items-center gap-2 mb-2">
+                                          <Sparkles size={16} className="text-[#C67B88]" />
+                                          <span className="text-sm font-bold text-[#C67B88]">Your Outfit Plan</span>
+                                      </div>
+                                      {pd.occasion && (
+                                          <p className="text-sm text-stone-700 mb-4">
+                                              Occasion: <strong>{pd.occasion}</strong>
+                                              <TagLabel extracted={!!ext.occasion} />
+                                          </p>
+                                      )}
+
+                                      {pd.items?.length > 0 && (
+                                          <div className="mb-4">
+                                              <div className="flex items-center mb-2">
+                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Outfit Items</p>
+                                                  <TagLabel extracted={!!ext.items} />
+                                              </div>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {pd.items.map((item: string, i: number) => (
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                          {itemCatIcon(item)} {item}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+
+                                      {pd.styles?.length > 0 && (
+                                          <div className="mb-4">
+                                              <div className="flex items-center mb-2">
+                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Style</p>
+                                                  <TagLabel extracted={!!ext.styles} />
+                                              </div>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {pd.styles.map((s: string, i: number) => (
+                                                      <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-xs font-bold text-rose-700">
+                                                          {s}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+
+                                      {pd.colors?.length > 0 && (
+                                          <div className="mb-4">
+                                              <div className="flex items-center mb-2">
+                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Color Palette</p>
+                                                  <TagLabel extracted={!!ext.colors} />
+                                              </div>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {pd.colors.map((c: string, i: number) => (
+                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                                          <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+
+                                      {pd.features?.length > 0 && (
+                                          <div className="mb-3">
+                                              <div className="flex items-center mb-2">
+                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Key Features</p>
+                                                  <TagLabel extracted={!!ext.features} />
+                                              </div>
+                                              <div className="flex flex-wrap gap-2">
+                                                  {pd.features.map((f: string, i: number) => (
+                                                      <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-xs font-medium text-amber-800">
+                                                          {f}
+                                                      </span>
+                                                  ))}
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
                               </div>
-                              {planData.occasion && (
-                                  <p className="text-sm text-stone-700 mb-4">
-                                      Occasion: <strong>{planData.occasion}</strong>
-                                      <TagLabel extracted={!!ext.occasion} />
-                                  </p>
-                              )}
+                          );
+                      }
 
-                              {planData.items?.length > 0 && (
-                                  <div className="mb-4">
-                                      <div className="flex items-center mb-2">
-                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Outfit Items</p>
-                                          <TagLabel extracted={!!ext.items} />
-                                      </div>
-                                      <div className="flex flex-wrap gap-2">
-                                          {planData.items.map((item: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
-                                                  {itemCatIcon(item)} {item}
-                                              </span>
-                                          ))}
-                                      </div>
-                                  </div>
-                              )}
+                      // Skip other system messages
+                      if (msg.role === 'system') return null;
 
-                              {planData.styles?.length > 0 && (
-                                  <div className="mb-4">
-                                      <div className="flex items-center mb-2">
-                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Style</p>
-                                          <TagLabel extracted={!!ext.styles} />
-                                      </div>
-                                      <div className="flex flex-wrap gap-2">
-                                          {planData.styles.map((s: string, i: number) => (
-                                              <span key={i} className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-full text-xs font-bold text-amber-700">
-                                                  {s}
-                                              </span>
-                                          ))}
-                                      </div>
-                                  </div>
-                              )}
-
-                              {planData.colors?.length > 0 && (
-                                  <div className="mb-4">
-                                      <div className="flex items-center mb-2">
-                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Color Palette</p>
-                                          <TagLabel extracted={!!ext.colors} />
-                                      </div>
-                                      <div className="flex flex-wrap gap-2">
-                                          {planData.colors.map((c: string, i: number) => (
-                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
-                                                  <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
-                                              </span>
-                                          ))}
-                                      </div>
-                                  </div>
-                              )}
-
-                              {planData.features?.length > 0 && (
-                                  <div className="mb-3">
-                                      <div className="flex items-center mb-2">
-                                          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Key Features</p>
-                                          <TagLabel extracted={!!ext.features} />
-                                      </div>
-                                      <div className="flex flex-wrap gap-2">
-                                          {planData.features.map((f: string, i: number) => (
-                                              <span key={i} className="px-3 py-1.5 bg-stone-100 border border-stone-200 rounded-full text-xs font-medium text-stone-600">
-                                                  {f}
-                                              </span>
-                                          ))}
-                                      </div>
-                                  </div>
-                              )}
+                      // User and assistant messages
+                      return (
+                          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                                  msg.role === 'user'
+? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white rounded-br-md shadow-sm'
+                                  : 'bg-white border border-rose-100/30 text-stone-800 rounded-bl-md shadow-sm'
+                              }`}>
+                                  {msg.content.split('\n').map((line, li) => (
+                                      <p key={li} className={li > 0 ? 'mt-1' : ''}>
+                                          {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
+                                              if (part.startsWith('**') && part.endsWith('**')) {
+                                                  return <strong key={pi}>{part.slice(2, -2)}</strong>;
+                                              }
+                                              return <span key={pi}>{part}</span>;
+                                          })}
+                                      </p>
+                                  ))}
+                              </div>
                           </div>
-                      </div>
                       );
-                  })()}
-
-                  {/* Chat messages (skip system) */}
-                  {chatMessages.filter(m => m.role !== 'system').map((msg, idx) => (
-                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                              msg.role === 'user'
-                                  ? 'bg-stone-900 text-white rounded-br-md'
-                                  : 'bg-stone-100 text-stone-800 rounded-bl-md'
-                          }`}>
-                              {msg.content.split('\n').map((line, li) => (
-                                  <p key={li} className={li > 0 ? 'mt-1' : ''}>
-                                      {line.split(/(\*\*.*?\*\*)/).map((part, pi) => {
-                                          if (part.startsWith('**') && part.endsWith('**')) {
-                                              return <strong key={pi}>{part.slice(2, -2)}</strong>;
-                                          }
-                                          return <span key={pi}>{part}</span>;
-                                      })}
-                                  </p>
-                              ))}
-                          </div>
-                      </div>
-                  ))}
+                  })}
 
                   {/* Outfit cards (after stylist generates) */}
                   {stylistOutfits.length > 0 && (
@@ -3087,7 +3113,7 @@ export default function App() {
                                               </div>
                                           )}
 
-                                          <div className="px-4 py-3.5 bg-white border-b border-stone-100">
+                                          <div className="px-4 py-3.5 bg-white border-b border-rose-100/50">
                                               <h3 className="font-bold text-sm text-stone-900 leading-tight">{styleTitle}</h3>
                                           </div>
                                           <div className="px-3 py-3 bg-white space-y-2.5">
@@ -3173,7 +3199,7 @@ export default function App() {
               </div>
 
               {/* Input Area */}
-              <div className="border-t border-stone-100 bg-white px-4 py-3 pb-6">
+              <div className="border-t border-rose-100/50 bg-[#FFFBF8] px-4 py-3 pb-6">
                   <div className="flex items-center gap-2">
                       <input
                           type="text"
@@ -3181,7 +3207,7 @@ export default function App() {
                           onChange={(e) => setChatInput(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleCard3ChatSend()}
                           placeholder="Type your response..."
-                          className="flex-1 px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-400 focus:bg-white transition-all"
+                          className="flex-1 px-4 py-3 bg-white/50 border-2 border-rose-200/50 rounded-xl text-sm outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all"
                           disabled={isChatLoading || isLoading}
                       />
                       <button
@@ -3201,7 +3227,7 @@ export default function App() {
                   {planData && !isGeneratingRecs && stylistOutfits.length === 0 && (
                       <button
                           onClick={handleCard3Confirm}
-                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
                       >
                           <Sparkles size={16} />
                           Generate Outfit Options
@@ -3211,7 +3237,7 @@ export default function App() {
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
                       <button
                           onClick={handleCard3Search}
-                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-stone-900 text-white hover:bg-stone-800 shadow-lg shadow-stone-200 flex items-center justify-center gap-2 transition-all"
+                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
                       >
                           <Search size={16} />
                           Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
@@ -3302,13 +3328,13 @@ export default function App() {
   };
 
   const renderResults = () => (
-    <div className="w-full max-w-5xl mx-auto h-[100dvh] flex flex-col bg-stone-50">
+    <div className="w-full max-w-5xl mx-auto h-[100dvh] flex flex-col bg-[#FFFBF8]">
        <div className="flex-1 overflow-y-auto space-y-6 pb-32 px-4 pt-6">
           <div className="flex items-center justify-between pb-4">
             <div className="flex items-center gap-3">
               <button 
                 onClick={() => setStep(AppStep.GOAL_SELECTION)}
-                className="p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-full transition-colors"
+                className="p-2 -ml-2 text-[#8B6F7D] hover:text-stone-900 hover:bg-rose-50 rounded-full transition-colors"
               >
                 <ArrowLeft size={20} />
               </button>
@@ -3322,20 +3348,20 @@ export default function App() {
               return (
                   <div key={idx} className="space-y-6 animate-fade-in">
                       {/* Chat Refinement Box */}
-                      <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-sm">
-                          <label className="text-xs font-bold text-stone-500 uppercase mb-2 block">Refine Results</label>
+                      <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-sm">
+                          <label className="text-xs font-bold text-[#8B6F7D] uppercase mb-2 block">Refine Results</label>
                           <div className="flex gap-2">
                               <input 
                                   type="text"
                                   value={searchQuery}
                                   onChange={(e) => setSearchQuery(e.target.value)}
                                   placeholder="e.g. 'Make it cheaper' or 'Show me red'"
-                                  className="flex-1 p-3 bg-stone-50 rounded-lg outline-none focus:ring-1 focus:ring-stone-900"
+                                  className="flex-1 p-3 bg-white/50 border-2 border-rose-200/50 rounded-lg outline-none focus:border-[#C67B88]/50 focus:bg-white transition-all"
                                   onKeyDown={(e) => e.key === 'Enter' && handleRefinement()}
                               />
                               <button 
                                   onClick={handleRefinement}
-                                  className="p-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800"
+                                  className="p-3 bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white rounded-lg shadow-md hover:shadow-lg transition-all"
                               >
                                   <Sparkles size={18} />
                               </button>
@@ -3355,95 +3381,116 @@ export default function App() {
                           ) : null;
                       })()}
 
-                      <div className="space-y-5">
-                          {msg.data?.recommendations.map((outfit, rIdx) => {
-                              const catIcon = itemCatIcon(outfit.name.toLowerCase().includes('top') ? 'top' : outfit.components?.[0]?.category || '');
-                              return (
-                              <div key={rIdx} className="bg-white rounded-2xl overflow-hidden shadow-sm border border-stone-100">
-                                  {/* Category Group Header */}
-                                  <div className="flex items-center justify-between px-5 py-4 border-b border-stone-50">
-                                      <div className="flex items-center gap-2.5">
-                                          <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
-                                              <ShoppingBag size={16} className="text-emerald-600" />
-                                          </div>
-                                          <h4 className="font-bold text-base text-stone-900">{outfit.name}</h4>
-                                      </div>
-                                      <span className="text-xs font-medium text-stone-400">{outfit.components?.length || 0} items</span>
-                                  </div>
+                      {/* Swipeable category cards */}
+                      {msg.data?.recommendations && msg.data.recommendations.length > 0 ? (
+                          <div>
+                              {/* Swipe hint */}
+                              {msg.data.recommendations.length > 1 && (
+                                  <p className="text-[10px] text-[#8B6F7D] mb-2 italic text-center">Swipe to see all {msg.data.recommendations.length} categories</p>
+                              )}
 
-                                  {/* Product Items */}
-                                  <div className="divide-y divide-stone-50">
-                                      {outfit.components && outfit.components.map((comp, cIdx) => (
-                                          <div key={cIdx} className="px-5 py-4">
-                                              <div className="flex items-center gap-4">
-                                                  {/* Product Thumbnail */}
-                                                  <div className="relative shrink-0">
-                                                      {comp.imageUrl ? (
-                                                          <div className="w-20 h-20 rounded-xl bg-stone-50 overflow-hidden border border-stone-100">
-                                                              <img src={comp.imageUrl} alt={comp.name} className="w-full h-full object-cover" />
-                                                          </div>
-                                                      ) : (
-                                                          <div className="w-20 h-20 rounded-xl bg-stone-50 flex items-center justify-center border border-stone-100">
-                                                              <Layers size={20} className="text-stone-300" />
-                                                          </div>
-                                                      )}
-                                                      {/* Verified badge */}
-                                                      <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center shadow-sm border-2 border-white">
-                                                          <Check size={12} className="text-white" strokeWidth={3} />
-                                                      </div>
+                              <div className="flex gap-4 overflow-x-auto pb-4 snap-x snap-mandatory -mx-4 px-4" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                                  {msg.data.recommendations.map((outfit, rIdx) => (
+                                      <div key={rIdx} className="snap-center shrink-0 w-[85%] bg-white rounded-2xl overflow-hidden shadow-sm border border-rose-200">
+                                          {/* Category Group Header */}
+                                          <div className="flex items-center justify-between px-5 py-4 border-b border-rose-50">
+                                              <div className="flex items-center gap-2.5">
+                                                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-pink-50 to-rose-50 border border-pink-100 flex items-center justify-center">
+                                                      <ShoppingBag size={16} className="text-[#C67B88]" />
                                                   </div>
-
-                                                  {/* Product Info */}
-                                                  <div className="flex-1 min-w-0">
-                                                      <p className="text-[11px] font-bold text-stone-400 uppercase tracking-wider mb-0.5">{comp.category}</p>
-                                                      <h5 className="text-sm font-bold text-stone-900 leading-snug line-clamp-2">{comp.name}</h5>
-                                                      <div className="flex items-center gap-1.5 mt-1">
-                                                          <span className="text-xs text-stone-500">{comp.brand}</span>
-                                                          <span className="text-xs text-stone-300">•</span>
-                                                          <span className="text-xs font-semibold text-emerald-600">Verified</span>
-                                                      </div>
-                                                      <p className="text-lg font-bold text-emerald-600 mt-1.5">{comp.price || 'Check Site'}</p>
-                                                  </div>
-
-                                                  {/* Action buttons */}
-                                                  <div className="flex flex-col gap-1.5 shrink-0">
-                                                      {comp.purchaseUrl && comp.purchaseUrl.startsWith('http') ? (
-                                                          <a 
-                                                              href={comp.purchaseUrl}
-                                                              target="_blank" 
-                                                              rel="noopener noreferrer"
-                                                              className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-900 text-white hover:bg-stone-700 transition-colors shadow-sm"
-                                                              title="Buy Item"
-                                                          >
-                                                              <ExternalLink size={14} />
-                                                          </a>
-                                                      ) : (
-                                                          <div className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-100 text-stone-300 cursor-not-allowed" title="Link Unavailable">
-                                                              <ExternalLink size={14} />
-                                                          </div>
-                                                      )}
-                                                      {comp.fallbackSearchUrl && (
-                                                          <a 
-                                                              href={comp.fallbackSearchUrl}
-                                                              target="_blank" 
-                                                              rel="noopener noreferrer"
-                                                              className="w-9 h-9 flex items-center justify-center rounded-lg bg-stone-50 text-stone-400 hover:bg-stone-100 hover:text-stone-600 transition-colors border border-stone-100"
-                                                              title="Find Similar"
-                                                          >
-                                                              <Search size={14} />
-                                                          </a>
-                                                      )}
-                                                  </div>
+                                                  <h4 className="font-bold text-base text-stone-900">{outfit.name}</h4>
                                               </div>
+                                              <span className="text-xs font-medium text-[#8B6F7D] bg-rose-50 px-2.5 py-1 rounded-full">{outfit.components?.length || 0} items</span>
                                           </div>
+
+                                          {/* Product Items */}
+                                          <div className="divide-y divide-rose-50/50">
+                                              {outfit.components && outfit.components.map((comp, cIdx) => (
+                                                  <div key={cIdx} className="px-5 py-4">
+                                                      <div className="flex items-center gap-4">
+                                                          {/* Product Thumbnail */}
+                                                          <div className="relative shrink-0">
+                                                              {comp.imageUrl ? (
+                                                                  <div className="w-20 h-20 rounded-xl bg-rose-50/50 overflow-hidden border border-rose-100">
+                                                                      <img src={comp.imageUrl} alt={comp.name} className="w-full h-full object-cover" />
+                                                                  </div>
+                                                              ) : (
+                                                                  <div className="w-20 h-20 rounded-xl bg-rose-50/50 flex items-center justify-center border border-rose-100">
+                                                                      <Layers size={20} className="text-rose-300" />
+                                                                  </div>
+                                                              )}
+                                                              {/* Verified badge */}
+                                                              <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-gradient-to-br from-[#C67B88] to-[#B56A78] rounded-full flex items-center justify-center shadow-sm border-2 border-white">
+                                                                  <Check size={12} className="text-white" strokeWidth={3} />
+                                                              </div>
+                                                          </div>
+
+                                                          {/* Product Info */}
+                                                          <div className="flex-1 min-w-0">
+                                                              <p className="text-[11px] font-bold text-[#8B6F7D] uppercase tracking-wider mb-0.5">{comp.category}</p>
+                                                              <h5 className="text-sm font-bold text-stone-900 leading-snug line-clamp-2">{comp.name}</h5>
+                                                              <div className="flex items-center gap-1.5 mt-1">
+                                                                  <span className="text-xs text-stone-500">{comp.brand}</span>
+                                                                  <span className="text-xs text-rose-200">•</span>
+                                                                  <span className="text-xs font-semibold text-[#C67B88]">Verified</span>
+                                                              </div>
+                                                              <p className="text-lg font-bold text-[#C67B88] mt-1.5">{comp.price || 'Check Site'}</p>
+                                                          </div>
+
+                                                          {/* Action buttons */}
+                                                          <div className="flex flex-col gap-1.5 shrink-0">
+                                                              {comp.purchaseUrl && comp.purchaseUrl.startsWith('http') ? (
+                                                                  <a 
+                                                                      href={comp.purchaseUrl}
+                                                                      target="_blank" 
+                                                                      rel="noopener noreferrer"
+                                                                      className="w-9 h-9 flex items-center justify-center rounded-lg bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-sm hover:shadow-md transition-all"
+                                                                      title="Buy Item"
+                                                                  >
+                                                                      <ExternalLink size={14} />
+                                                                  </a>
+                                                              ) : (
+                                                                  <div className="w-9 h-9 flex items-center justify-center rounded-lg bg-rose-50 text-rose-300 cursor-not-allowed" title="Link Unavailable">
+                                                                      <ExternalLink size={14} />
+                                                                  </div>
+                                                              )}
+                                                              {comp.fallbackSearchUrl && (
+                                                                  <a 
+                                                                      href={comp.fallbackSearchUrl}
+                                                                      target="_blank" 
+                                                                      rel="noopener noreferrer"
+                                                                      className="w-9 h-9 flex items-center justify-center rounded-lg bg-rose-50 text-[#8B6F7D] hover:bg-rose-100 transition-colors border border-rose-100"
+                                                                      title="Find Similar"
+                                                                  >
+                                                                      <Search size={14} />
+                                                                  </a>
+                                                              )}
+                                                          </div>
+                                                      </div>
+                                                  </div>
+                                              ))}
+                                          </div>
+
+                                          {/* Card index indicator */}
+                                          {msg.data && msg.data.recommendations.length > 1 && (
+                                              <div className="px-5 py-3 bg-rose-50/30 border-t border-rose-50 flex items-center justify-center">
+                                                  <span className="text-[10px] font-bold text-[#8B6F7D]">{rIdx + 1} / {msg.data.recommendations.length}</span>
+                                              </div>
+                                          )}
+                                      </div>
+                                  ))}
+                              </div>
+
+                              {/* Dot indicators */}
+                              {msg.data.recommendations.length > 1 && (
+                                  <div className="flex justify-center gap-1.5 mt-3">
+                                      {msg.data.recommendations.map((_, dIdx) => (
+                                          <div key={dIdx} className="w-2 h-2 rounded-full bg-rose-200" />
                                       ))}
                                   </div>
-                              </div>
-                              );
-                          })}
-                      </div>
-                      
-                      {msg.data?.recommendations.length === 0 && (
+                              )}
+                          </div>
+                      ) : (
                           <div className="text-center p-8 bg-white rounded-2xl border border-red-100">
                               <p className="text-red-600 font-bold mb-2">No Results Found</p>
                               <p className="text-sm text-stone-500">We couldn't find matching items. Try relaxing your search criteria or budget.</p>
@@ -3455,25 +3502,27 @@ export default function App() {
        </div>
 
        {/* Bottom Navigation Bar */}
-       <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 p-4 pb-8 z-10">
-           <div className="max-w-5xl mx-auto flex items-center justify-between px-4 gap-3">
-               <button 
-                   onClick={() => setStep(AppStep.GOAL_SELECTION)}
-                   className="flex items-center gap-2 px-5 h-12 border border-stone-200 rounded-xl hover:bg-stone-50 transition-colors text-sm font-medium text-stone-600"
-               >
-                   <Home size={16} />
-                   Start Over
-               </button>
-               <button 
-                   onClick={() => {
-                       setMessages([]);
-                       setStep(AppStep.GOAL_SELECTION);
-                   }}
-                   className="flex-1 bg-stone-950 text-white font-medium h-12 rounded-xl transition-all shadow-lg shadow-stone-200 hover:bg-stone-800 text-sm flex items-center justify-center gap-2"
-               >
-                   <Search size={16} />
-                   New Search
-               </button>
+       <div className="fixed bottom-0 inset-x-0 z-10 pointer-events-none">
+           <div className="max-w-md mx-auto pointer-events-auto bg-[#FFFBF8] border-t border-rose-100/50 p-4 pb-8">
+               <div className="flex items-center justify-between px-4 gap-3">
+                   <button 
+                       onClick={() => setStep(AppStep.GOAL_SELECTION)}
+                       className="flex items-center gap-2 px-5 h-12 border border-rose-200 rounded-xl hover:bg-rose-50 transition-colors text-sm font-medium text-[#8B6F7D]"
+                   >
+                       <Home size={16} />
+                       Start Over
+                   </button>
+                   <button 
+                       onClick={() => {
+                           setMessages([]);
+                           setStep(AppStep.GOAL_SELECTION);
+                       }}
+                       className="flex-1 bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white font-medium h-12 rounded-xl transition-all shadow-md hover:shadow-lg text-sm flex items-center justify-center gap-2"
+                   >
+                       <Search size={16} />
+                       New Search
+                   </button>
+               </div>
            </div>
        </div>
     </div>
@@ -3510,7 +3559,7 @@ export default function App() {
   };
 
   const renderProfileSetup = () => (
-      <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+      <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32 bg-[#FFFBF8] min-h-screen">
           {/* Back Button */}
           <button 
               onClick={() => {
@@ -3700,14 +3749,14 @@ export default function App() {
       ];
 
       return (
-          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32">
+          <div className="max-w-md mx-auto px-6 pt-6 animate-fade-in pb-32 bg-[#FFFBF8] min-h-screen">
               {/* Back Button */}
               <button 
                   onClick={() => {
                       setIsEditingProfile(false);
                       setStep(previousStep === AppStep.PROFILE_SETUP || previousStep === AppStep.PROFILE_VIEW ? AppStep.GOAL_SELECTION : previousStep);
                   }}
-                  className="mb-4 p-2 -ml-2 text-stone-400 hover:text-stone-900 hover:bg-stone-100 rounded-xl transition-colors"
+                  className="mb-4 p-2 -ml-2 text-[#8B6F7D] hover:text-stone-900 hover:bg-rose-50 rounded-xl transition-colors"
               >
                   <ChevronLeft size={24} />
               </button>
@@ -3800,8 +3849,9 @@ export default function App() {
   const isHomePage = !isProfilePage;
 
   const BottomNav = () => (
-      <div className="fixed bottom-0 left-0 w-full bg-white border-t border-stone-100 z-40">
-          <div className="max-w-md mx-auto flex items-center justify-around py-2 pb-6">
+      <div className="fixed bottom-0 inset-x-0 z-40 pointer-events-none">
+          <div className="max-w-md mx-auto pointer-events-auto bg-[#FFFBF8] border-t border-rose-100/50">
+              <div className="flex items-center justify-around py-2 pb-6">
               <button 
                   onClick={() => {
                       if (!isHomePage) {
@@ -3809,7 +3859,7 @@ export default function App() {
                       }
                   }}
                   className={`flex flex-col items-center gap-0.5 px-6 py-1.5 rounded-xl transition-all ${
-                      isHomePage ? 'text-stone-900' : 'text-stone-400 hover:text-stone-600'
+                      isHomePage ? 'text-[#C67B88]' : 'text-[#8B6F7D]/50 hover:text-[#8B6F7D]'
                   }`}
               >
                   <Home size={22} strokeWidth={isHomePage ? 2.5 : 1.5} />
@@ -3823,7 +3873,7 @@ export default function App() {
                       }
                   }}
                   className={`flex flex-col items-center gap-0.5 px-6 py-1.5 rounded-xl transition-all relative ${
-                      isProfilePage ? 'text-stone-900' : 'text-stone-400 hover:text-stone-600'
+                      isProfilePage ? 'text-[#C67B88]' : 'text-[#8B6F7D]/50 hover:text-[#8B6F7D]'
                   }`}
               >
                   <User size={22} strokeWidth={isProfilePage ? 2.5 : 1.5} />
@@ -3832,12 +3882,13 @@ export default function App() {
                       <div className="absolute top-0.5 right-4 w-2 h-2 bg-red-500 rounded-full" />
                   )}
               </button>
+              </div>
           </div>
       </div>
   );
 
   return (
-    <div className="min-h-screen bg-white text-stone-900 font-sans selection:bg-stone-200">
+    <div className="min-h-screen bg-[#FFFBF8] text-stone-900 font-sans selection:bg-rose-200">
         <main className="min-h-screen pb-20">
             {step === AppStep.GOAL_SELECTION && renderLanding()}
             {step === AppStep.ITEM_TYPE && renderItemType()}
@@ -3871,16 +3922,16 @@ export default function App() {
         {showBottomNav && <BottomNav />}
 
         {step === AppStep.SEARCHING && (
-             <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-center p-6">
-                 <div className="w-16 h-16 border-4 border-stone-100 border-t-stone-900 rounded-full animate-spin mb-8"></div>
+             <div className="fixed inset-0 bg-[#FFFBF8]/95 backdrop-blur-sm z-50 flex flex-col items-center justify-center text-center p-6">
+                 <div className="w-16 h-16 border-4 border-rose-100 border-t-[#C67B88] rounded-full animate-spin mb-8"></div>
                  <h3 className="text-2xl font-bold font-sans text-stone-900 mb-2">Searching for you</h3>
-                 <p className="text-stone-500 max-w-md animate-pulse">
+                 <p className="text-[#8B6F7D] max-w-md animate-pulse">
                      Finding the best items across online stores...
                  </p>
                  {selectedItemTypes.length > 0 && (
                      <div className="mt-4 flex flex-wrap justify-center gap-2">
                          {selectedItemTypes.map((item, i) => (
-                             <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-600 bg-stone-100 px-3 py-1.5 rounded-full">
+                             <span key={i} className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-700 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 px-3 py-1.5 rounded-full">
                                  <Search size={10} /> {item}
                              </span>
                          ))}
