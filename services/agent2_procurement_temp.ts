@@ -300,6 +300,7 @@ export const runCategoryMicroAgent = async (
                 [ITEM ${idx}]
                 Name: ${item.name}
                 Source: ${item.fetchSource}
+                Listed Price: ${item.price || "Unknown"}
                 Content Sample: "${(item.pageContent || "").slice(0, 400).replace(/\n/g, ' ')}"
                 `).join('\n\n')}
                 
@@ -310,7 +311,8 @@ export const runCategoryMicroAgent = async (
                 
                 **CRITICAL:**
                 - Be LENIENT. If it looks like a product page, assume it is valid unless EXPLICITLY "sold out".
-                - Do NOT reject items just because you can't see the price in the snippet. Set price to "Check Site".
+                - For price: Use the price found in the page content if available. If not found in content, use the "Listed Price" from the search results. Only set price to "Check Site" if no price is available at all.
+                - Do NOT reject items just because you can't see the price in the snippet.
 
                 **Output Schema (Strict JSON Array):**
                 [
@@ -353,7 +355,7 @@ export const runCategoryMicroAgent = async (
                              batchValidated.push({
                                 ...candidate,
                                 brand: candidate.name.split(' ')[0], 
-                                price: analysis.price || "Check Site",
+                                price: analysis.price || candidate.price || "Check Site",
                                 description: analysis.reason || candidate.snippet,
                                 stockStatus: analysis.stockStatus === 'LIKELY_AVAILABLE' ? 'IN STOCK' : 'RISK',
                                 matchScore: analysis.matchScore || 50,

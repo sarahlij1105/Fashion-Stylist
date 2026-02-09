@@ -31,7 +31,8 @@ export const runVerificationStep = async (
     const BLACKLIST_DOMAINS = ['pinterest', 'polyvore', 'temu', 'shein'];
     
     const parsePrice = (p: string) => parseFloat((p || '').replace(/[^0-9.]/g, '')) || 0;
-    const priceParts = preferences.priceRange.replace(/\$/g, '').split('-');
+    const priceRangeStr = preferences.priceRange || '';
+    const priceParts = priceRangeStr.replace(/\$/g, '').split('-');
     const maxBudget = parseFloat(priceParts[1] || priceParts[0]) || 2000;
     const budgetCap = maxBudget * 1.3; // 30% buffer
 

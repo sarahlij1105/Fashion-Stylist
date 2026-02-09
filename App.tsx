@@ -163,7 +163,8 @@ export default function App() {
   // Card 2 State
   const [keptItems, setKeptItems] = useState<string[]>([]);
   const [stylistOutfits, setStylistOutfits] = useState<StylistOutfit[]>([]);
-  const [selectedOutfitIndex, setSelectedOutfitIndex] = useState<number | null>(null);
+  const [selectedOutfitIndex, setSelectedOutfitIndex] = useState<number | null>(null); // which outfit is currently being viewed
+  const [likedOutfitIndex, setLikedOutfitIndex] = useState<number | null>(null); // which outfit user explicitly liked
   const [stylistSearchQueries, setStylistSearchQueries] = useState<Record<string, string>>({});
   const [isAnalyzingCard2, setIsAnalyzingCard2] = useState(false);
   const [isGeneratingRecs, setIsGeneratingRecs] = useState(false);
@@ -200,8 +201,8 @@ export default function App() {
   const [useManualSize, setUseManualSize] = useState(false);
 
   // Hoisted from renderUploadPhoto (hooks must be at top level)
-  const [heightVal, setHeightVal] = useState('');
-  const [heightUnit, setHeightUnit] = useState('cm');
+  const [heightFeet, setHeightFeet] = useState('');
+  const [heightInches, setHeightInches] = useState('');
 
   // --- NEW: Landing Page Logic ---
   const handleSmartEntry = async () => {
@@ -268,10 +269,11 @@ export default function App() {
 
   // Hoisted from renderUploadPhoto (hooks must be at top level)
   useEffect(() => {
-      if (heightVal) {
-          setProfile(p => ({...p, height: `${heightVal} ${heightUnit}`}));
+      if (heightFeet) {
+          const inches = heightInches || '0';
+          setProfile(p => ({...p, height: `${heightFeet}'${inches}"`}));
       }
-  }, [heightVal, heightUnit]);
+  }, [heightFeet, heightInches]);
 
   // Hoisted from renderCard1Chat - auto-scroll chat only when NEW messages are added
   useEffect(() => {
@@ -767,6 +769,7 @@ export default function App() {
           setChatInput('');
           setStylistOutfits([]);
           setSelectedOutfitIndex(null);
+          setLikedOutfitIndex(null);
           setCard3Plan(null);
           setIsGeneratingRecs(false);
 
@@ -1165,7 +1168,7 @@ export default function App() {
        {/* Quick Searches */}
        <div className="mb-6">
            <p className="text-[10px] font-bold text-[#8B6F7D] uppercase tracking-widest mb-3">Quick Searches</p>
-           <div className="flex flex-wrap gap-2">
+           <div className="grid grid-cols-3 gap-1.5">
                {quickSearches.map((qs) => (
                    <button
                        key={qs.label}
@@ -1173,9 +1176,9 @@ export default function App() {
                            setSearchQuery(qs.label);
                            handleCard3GoToChat(qs.label);
                        }}
-                       className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-rose-200 rounded-full text-sm font-medium text-stone-700 hover:border-[#C67B88] hover:shadow-sm transition-all"
+                       className="inline-flex items-center justify-center gap-1 px-2 py-1.5 bg-white border border-rose-200 rounded-full text-[11px] font-medium text-stone-700 hover:border-[#C67B88] hover:shadow-sm transition-all"
                    >
-                       <span className="text-sm">{qs.icon}</span> {qs.label}
+                       <span className="text-xs">{qs.icon}</span> {qs.label}
                    </button>
                ))}
            </div>
@@ -1204,6 +1207,7 @@ export default function App() {
                  setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING})); 
                  setStylistOutfits([]);
                  setSelectedOutfitIndex(null);
+                 setLikedOutfitIndex(null);
                  setChatMessages([]);
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD1_DETAILS);
@@ -1225,6 +1229,7 @@ export default function App() {
                  setPreferences(p => ({...p, purpose: FashionPurpose.MATCHING}));
                  setStylistOutfits([]);
                  setSelectedOutfitIndex(null);
+                 setLikedOutfitIndex(null);
                  setChatMessages([]);
                  heroImageRequestIdRef.current++;
                  setStep(AppStep.CARD2_DETAILS);
@@ -1308,7 +1313,7 @@ export default function App() {
 
   const renderUploadPhoto = () => {
     const isHeic = profile.userImageBase64 ? (profile.userImageBase64.toLowerCase().includes('image/heic') || profile.userImageBase64.toLowerCase().includes('image/heif')) : false;
-    // useState and useEffect for heightVal/heightUnit are now hoisted to App top level
+    // useState and useEffect for heightFeet/heightInches are now hoisted to App top level
 
     return (
     <div className="max-w-md mx-auto px-6 pt-14 animate-fade-in pb-32">
@@ -1368,22 +1373,25 @@ export default function App() {
       <div className="space-y-4">
         <div>
              <label className="block text-sm font-bold text-stone-900 mb-1.5">Your Height</label>
-             <div className="flex gap-2">
+             <div className="flex gap-2 items-center">
                  <input 
                     type="number" 
-                    value={heightVal}
-                    onChange={(e) => setHeightVal(e.target.value)}
-                    placeholder={heightUnit === 'cm' ? "165" : "5.5"}
-                    className="flex-1 p-4 bg-white border border-stone-200 rounded-xl outline-none focus:ring-1 focus:ring-stone-900"
+                    value={heightFeet}
+                    onChange={(e) => setHeightFeet(e.target.value)}
+                    placeholder="5"
+                    min="3" max="7"
+                    className="w-20 p-4 bg-white border border-stone-200 rounded-xl outline-none focus:ring-1 focus:ring-stone-900 text-center"
                  />
-           <select 
-                    value={heightUnit}
-                    onChange={(e) => setHeightUnit(e.target.value)}
-                    className="p-4 bg-white border border-stone-200 rounded-xl outline-none"
-                 >
-                     <option value="cm">cm</option>
-                     <option value="ft">ft</option>
-             </select>
+                 <span className="text-lg font-bold text-stone-400">ft</span>
+                 <input 
+                    type="number" 
+                    value={heightInches}
+                    onChange={(e) => setHeightInches(e.target.value)}
+                    placeholder="6"
+                    min="0" max="11"
+                    className="w-20 p-4 bg-white border border-stone-200 rounded-xl outline-none focus:ring-1 focus:ring-stone-900 text-center"
+                 />
+                 <span className="text-lg font-bold text-stone-400">in</span>
              </div>
           </div>
         </div>
@@ -1443,7 +1451,7 @@ export default function App() {
           </div>
       )}
 
-      <NavigationButtons onContinue={nextStep} onBack={prevStep} disabled={!profile.userImageBase64 || !heightVal} />
+      <NavigationButtons onContinue={nextStep} onBack={prevStep} disabled={!profile.userImageBase64 || !heightFeet} />
     </div>
     );
   };
@@ -2018,12 +2026,12 @@ export default function App() {
   // into onCard2Continue inside renderCard2Details for a streamlined Card 2 flow.
 
   const handleCard2Search = async () => {
-      if (selectedOutfitIndex === null || !stylistOutfits[selectedOutfitIndex]) return;
+      if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
       
       archiveCurrentSearch();
       setStep(AppStep.SEARCHING);
       
-      const selectedOutfit = stylistOutfits[selectedOutfitIndex];
+      const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
       try {
           // Step 1: Gemini Pro generates optimized SerpApi search queries
@@ -2099,6 +2107,7 @@ export default function App() {
           setChatInput('');
           setStylistOutfits([]);
           setSelectedOutfitIndex(null);
+          setLikedOutfitIndex(null);
           setCard3Plan(null);
           setStyleAnalysisResults(null);
           
@@ -2152,10 +2161,9 @@ export default function App() {
                       keptItems: keptItemsText,
                   }),
               };
-              const outfitLabels = response.outfits.map((o, i) => `**Option ${String.fromCharCode(65 + i)}** — ${o.name}`).join('\n');
               const introMsg: RefinementChatMessage = {
                   role: 'assistant',
-                  content: `Based on your current outfit, here are 3 styling ideas! Swipe through them above.\n\n${outfitLabels}\n\nTap the one you like most, then either:\n• Hit **Find Items** to search for it, or\n• Tell me any adjustments (e.g., "change the hair clip to a hat" or "make the boots black") and I'll update just that option.`,
+                  content: `Here are 3 styling ideas based on your current outfit! Swipe through them above and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "change the hair clip to a hat" or "make the boots black") and I'll update it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
               };
               setChatMessages([analysisMsg, introMsg]);
 
@@ -2532,7 +2540,7 @@ export default function App() {
                   {/* Outfit recommendation card — single view with prev/next */}
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (() => {
                       const outfit = stylistOutfits[selectedOutfitIndex];
-                      const isLiked = selectedOutfitIndex !== null;
+                      const isLiked = likedOutfitIndex === selectedOutfitIndex;
                       const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
                       return (
                           <div className="pt-1">
@@ -2587,10 +2595,14 @@ export default function App() {
                                       <ChevronLeft size={22} />
                                   </button>
                                   <button
-                                      onClick={() => setSelectedOutfitIndex(selectedOutfitIndex)}
-                                      className="px-6 py-3 rounded-full bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white font-bold text-sm flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
+                                      onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
+                                      className={`px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all ${
+                                          isLiked
+                                              ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
+                                              : 'bg-stone-100 border border-stone-200 text-stone-400 hover:bg-stone-200'
+                                      }`}
                                   >
-                                      <Heart size={16} className="fill-white" /> Liked
+                                      <Heart size={16} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
                                   </button>
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev < stylistOutfits.length - 1 ? prev + 1 : 0)}
@@ -2651,14 +2663,21 @@ export default function App() {
                       </button>
                 </div>
 
-                  {/* Search button */}
+                  {/* Search button — only enabled when user has liked an outfit */}
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
                       <button
                           onClick={handleCard2Search}
-                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
+                          disabled={likedOutfitIndex === null}
+                          className={`w-full mt-3 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                              likedOutfitIndex !== null
+                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
+                                  : 'bg-stone-100 text-stone-400 cursor-not-allowed'
+                          }`}
                       >
                           <Search size={16} />
-                          Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
+                          {likedOutfitIndex !== null
+                              ? `Find Items for Option ${String.fromCharCode(65 + likedOutfitIndex)}`
+                              : 'Like an outfit to find items'}
                       </button>
                   )}
               </div>
@@ -2677,6 +2696,7 @@ export default function App() {
       setCard3Plan(null);
       setStylistOutfits([]);
       setSelectedOutfitIndex(null);
+      setLikedOutfitIndex(null);
       setStyleAnalysisResults(null);
       setIsGeneratingRecs(false);
       heroImageRequestIdRef.current++;
@@ -2708,34 +2728,8 @@ export default function App() {
               content: JSON.stringify({ type: 'card3_plan', ...plan }),
           };
 
-          // Build smart welcome message highlighting extracted vs. recommended
-          const ext = plan.extracted;
-          let welcomeText = '';
-          
-          // Mention what was understood from user input
-          const understood: string[] = [];
-          if (ext.occasion && plan.occasion) understood.push(`**${plan.occasion}** as your occasion`);
-          if (ext.items && plan.items.length > 0) understood.push(`**${plan.items.join(', ')}** as items you're looking for`);
-          if (ext.styles && plan.styles.length > 0) understood.push(`**${plan.styles.join(', ')}** style`);
-          if (ext.colors && plan.colors.length > 0) understood.push(`**${plan.colors.join(', ')}** colors`);
-          
-          if (understood.length > 0) {
-              welcomeText += `Got it! I understood ${understood.join(', ')} from your request. `;
-          }
-          welcomeText += `I've put together a recommended plan above.`;
-
-          // Contextual follow-up based on whether items were user-specified or AI-suggested
-          if (plan.suggestedAdditionalItems.length > 0 && ext.items) {
-              // User mentioned specific items — offer complementary additions
-              const additionalNames = plan.suggestedAdditionalItems.map(i => itemToDisplay[i] || i).filter(Boolean);
-              welcomeText += `\n\nTo complete your look, would you also like me to find **${additionalNames.join(' and ')}**? Just say yes or tell me what else you need!`;
-          } else if (!ext.items && plan.items.length > 0) {
-              // User didn't mention specific items — agent recommended a full outfit
-              const itemNames = plan.items.map(i => itemToDisplay[i] || i).filter(Boolean);
-              welcomeText += `\n\nFor this occasion, I recommend searching for **${itemNames.join(', ')}** to put together a complete look. Feel free to add or remove items, then hit **Generate Outfit Options**!`;
-          } else {
-              welcomeText += `\n\nFeel free to adjust anything — tell me if you'd like to change styles, colors, or items. Once you're happy, hit **Generate Outfit Options**!`;
-          }
+          // Short, friendly welcome message
+          const welcomeText = `We've generated a style card for you based on your request! ✨\n\nFeel free to let us know if you'd like any changes. Once you're happy with it, tap **Generate Outfit Options** below to see the outfits we've prepared for you.`;
 
           const welcomeMsg: RefinementChatMessage = {
               role: 'assistant',
@@ -2756,6 +2750,13 @@ export default function App() {
 
   const handleCard3Confirm = async () => {
       if (!card3Plan) return;
+
+      // Add user confirmation message to chat
+      const confirmMsg: RefinementChatMessage = {
+          role: 'user',
+          content: 'I confirm this style card, please show me 3 outfit recommendations!',
+      };
+      setChatMessages(prev => [...prev, confirmMsg]);
 
       setIsGeneratingRecs(true);
       try {
@@ -2787,11 +2788,10 @@ export default function App() {
               }
           });
 
-          // Add a prompt message asking the user to pick their favorite
-          const outfitLabels = response.outfits.map((o, i) => `**Option ${String.fromCharCode(65 + i)}** — ${o.name}`).join('\n');
+          // Add a guidance message asking the user to pick their favorite
           const pickMsg: RefinementChatMessage = {
               role: 'assistant',
-              content: `Here are 3 outfit options I created for you! Swipe through them above.\n\n${outfitLabels}\n\nTap the one you like most, then either:\n• Hit **Find Items** to search for it, or\n• Tell me any adjustments (e.g., "make the dress blue" or "swap the heels for flats") and I'll update just that option.`,
+              content: `Here are 3 outfit options! Swipe through them above and tap the ❤️ **Like** button on your favorite.\n\nWant any changes? Just tell me (e.g., "make the dress red" or "swap the heels for flats") and I'll update it.\n\nOnce you've picked your favorite, hit **Find Items** to start shopping!`,
           };
           setChatMessages(prev => [...prev, pickMsg]);
       } catch (e) {
@@ -2803,11 +2803,11 @@ export default function App() {
   };
 
   const handleCard3Search = async () => {
-      if (selectedOutfitIndex === null || !stylistOutfits[selectedOutfitIndex]) return;
+      if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
 
       archiveCurrentSearch();
       setStep(AppStep.SEARCHING);
-      const selectedOutfit = stylistOutfits[selectedOutfitIndex];
+      const selectedOutfit = stylistOutfits[likedOutfitIndex];
 
       try {
           // Step 1: Gemini Pro generates optimized SerpApi search queries
@@ -2865,13 +2865,43 @@ export default function App() {
           if (updatedCriteria && Object.keys(updatedCriteria).length > 0) {
               setCard3Plan(prev => {
                   if (!prev) return prev;
-                  return {
+                  const updatedPlan = {
                       ...prev,
                       styles: updatedCriteria.style ? updatedCriteria.style.split(', ') : prev.styles,
                       colors: updatedCriteria.colors || prev.colors,
                       items: updatedCriteria.includedItems || prev.items,
                       features: updatedCriteria.additionalNotes ? updatedCriteria.additionalNotes.split(', ') : prev.features,
                   };
+
+                  // Also update the style card system message in chat so it re-renders with new data
+                  setChatMessages(prevMsgs => prevMsgs.map(m => {
+                      if (m.role === 'system' && m.content.includes('card3_plan')) {
+                          try {
+                              const oldPd = JSON.parse(m.content);
+                              return {
+                                  ...m,
+                                  content: JSON.stringify({
+                                      ...oldPd,
+                                      styles: updatedPlan.styles,
+                                      colors: updatedPlan.colors,
+                                      items: updatedPlan.items,
+                                      features: updatedPlan.features,
+                                      // Mark user-modified fields as extracted (user preference)
+                                      extracted: {
+                                          ...oldPd.extracted,
+                                          ...(updatedCriteria.style ? { styles: true } : {}),
+                                          ...(updatedCriteria.colors ? { colors: true } : {}),
+                                          ...(updatedCriteria.includedItems ? { items: true } : {}),
+                                          ...(updatedCriteria.additionalNotes ? { features: true } : {}),
+                                      },
+                                  }),
+                              };
+                          } catch { return m; }
+                      }
+                      return m;
+                  }));
+
+                  return updatedPlan;
               });
 
               // Sync selectedItemTypes so handleCard3Confirm uses the latest items
@@ -3069,21 +3099,6 @@ export default function App() {
 
               {/* Chat area */}
               <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-                  {/* Loading state */}
-                  {isLoading && !planData && (
-                      <div className="flex justify-center items-center py-16">
-                          <div className="text-center">
-                              <div className="flex justify-center mb-4">
-                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '0ms' }} />
-                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '150ms' }} />
-                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '300ms' }} />
-                              </div>
-                              <p className="text-sm font-medium text-stone-600">Planning your outfit...</p>
-                              <p className="text-xs text-stone-400 mt-1">Analyzing occasion and style options</p>
-                          </div>
-                      </div>
-                  )}
-
                   {/* All messages in chronological order */}
                   {chatMessages.map((msg, idx) => {
                       // System message with card3_plan → render inline analysis card
@@ -3092,89 +3107,113 @@ export default function App() {
                           try { pd = JSON.parse(msg.content); } catch {}
                           if (!pd) return null;
                           const ext = pd.extracted || {};
-                          const TagLabel = ({ extracted }: { extracted: boolean }) => (
-                              <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ml-2 ${
-                                  extracted ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-50 text-amber-500'
-                              }`}>
-                                  {extracted ? 'From you' : 'Suggested'}
-                              </span>
-                          );
+                          // Separate data into extracted (from user) and suggested (by agent)
+                          const extractedSections: any[] = [];
+                          const suggestedSections: any[] = [];
+
+                          // Occasion
+                          if (pd.occasion) {
+                              const section = (
+                                  <div key="occasion" className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1.5">Occasion</p>
+                                      <p className="text-sm font-bold text-stone-900">{pd.occasion}</p>
+                                  </div>
+                              );
+                              (ext.occasion ? extractedSections : suggestedSections).push(section);
+                          }
+
+                          // Styles
+                          if (pd.styles?.length > 0) {
+                              const section = (
+                                  <div key="styles" className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Style</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {pd.styles.map((s: string, i: number) => (
+                                              <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-xs font-bold text-rose-700">
+                                                  {s}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                              (ext.styles ? extractedSections : suggestedSections).push(section);
+                          }
+
+                          // Items
+                          if (pd.items?.length > 0) {
+                              const section = (
+                                  <div key="items" className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Outfit Items</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {pd.items.map((item: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
+                                                  {itemCatIcon(item)} {item}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                              (ext.items ? extractedSections : suggestedSections).push(section);
+                          }
+
+                          // Colors
+                          if (pd.colors?.length > 0) {
+                              const section = (
+                                  <div key="colors" className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Color Palette</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {pd.colors.map((c: string, i: number) => (
+                                              <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
+                                                  <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                              (ext.colors ? extractedSections : suggestedSections).push(section);
+                          }
+
+                          // Features
+                          if (pd.features?.length > 0) {
+                              const section = (
+                                  <div key="features" className="mb-4">
+                                      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Key Features</p>
+                                      <div className="flex flex-wrap gap-2">
+                                          {pd.features.map((f: string, i: number) => (
+                                              <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-xs font-medium text-amber-800">
+                                                  {f}
+                                              </span>
+                                          ))}
+                                      </div>
+                                  </div>
+                              );
+                              (ext.features ? extractedSections : suggestedSections).push(section);
+                          }
+
                           return (
                               <div key={idx} className="flex justify-start">
-                                  <div className="max-w-[90%] bg-gradient-to-br from-pink-50/80 to-rose-50/80 border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
-                                      <div className="flex items-center gap-2 mb-2">
-                                          <Sparkles size={16} className="text-[#C67B88]" />
-                                          <span className="text-sm font-bold text-[#C67B88]">Your Outfit Plan</span>
+                                  <div className="max-w-[90%] bg-[#FFFBF8] border border-pink-100 rounded-2xl rounded-bl-md px-4 py-4 shadow-sm">
+                                      {/* Title */}
+                                      <div className="flex items-center gap-2 mb-4">
+                                          <Sparkles size={18} className="text-[#C67B88]" />
+                                          <span className="text-lg font-bold font-serif text-[#C67B88]">Your Style Card</span>
                                       </div>
-                                      {pd.occasion && (
-                                          <p className="text-sm text-stone-700 mb-4">
-                                              Occasion: <strong>{pd.occasion}</strong>
-                                              <TagLabel extracted={!!ext.occasion} />
-                                          </p>
+
+                                      {/* Extracted sections (from user) */}
+                                      {extractedSections.length > 0 && (
+                                          <div>{extractedSections}</div>
                                       )}
 
-                                      {pd.items?.length > 0 && (
-                                          <div className="mb-4">
-                                              <div className="flex items-center mb-2">
-                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Outfit Items</p>
-                                                  <TagLabel extracted={!!ext.items} />
+                                      {/* Divider — only show if there are both extracted and suggested */}
+                                      {suggestedSections.length > 0 && (
+                                          <>
+                                              <div className="flex items-center gap-3 my-4">
+                                                  <div className="flex-1 h-px bg-stone-200" />
+                                                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Suggestions</span>
+                                                  <div className="flex-1 h-px bg-stone-200" />
                                               </div>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {pd.items.map((item: string, i: number) => (
-                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-800 capitalize shadow-sm">
-                                                          {itemCatIcon(item)} {item}
-                                                      </span>
-                                                  ))}
-                                              </div>
-                                          </div>
-                                      )}
-
-                                      {pd.styles?.length > 0 && (
-                                          <div className="mb-4">
-                                              <div className="flex items-center mb-2">
-                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Style</p>
-                                                  <TagLabel extracted={!!ext.styles} />
-                                              </div>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {pd.styles.map((s: string, i: number) => (
-                                                      <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-pink-100 to-rose-100 border border-rose-300 rounded-full text-xs font-bold text-rose-700">
-                                                          {s}
-                                                      </span>
-                                                  ))}
-                                              </div>
-                                          </div>
-                                      )}
-
-                                      {pd.colors?.length > 0 && (
-                                          <div className="mb-4">
-                                              <div className="flex items-center mb-2">
-                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Color Palette</p>
-                                                  <TagLabel extracted={!!ext.colors} />
-                                              </div>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {pd.colors.map((c: string, i: number) => (
-                                                      <span key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-rose-200 rounded-full text-xs font-bold text-stone-700 shadow-sm">
-                                                          <span className="w-3 h-3 rounded-full shrink-0 border border-stone-200" style={{ backgroundColor: colorNameToCSS(c) }} /> {c}
-                                                      </span>
-                                                  ))}
-                                              </div>
-                                          </div>
-                                      )}
-
-                                      {pd.features?.length > 0 && (
-                                          <div className="mb-3">
-                                              <div className="flex items-center mb-2">
-                                                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Key Features</p>
-                                                  <TagLabel extracted={!!ext.features} />
-                                              </div>
-                                              <div className="flex flex-wrap gap-2">
-                                                  {pd.features.map((f: string, i: number) => (
-                                                      <span key={i} className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-[#D4AF6A] rounded-full text-xs font-medium text-amber-800">
-                                                          {f}
-                                                      </span>
-                                                  ))}
-                                              </div>
-                                          </div>
+                                              <div>{suggestedSections}</div>
+                                          </>
                                       )}
                                   </div>
                               </div>
@@ -3207,10 +3246,25 @@ export default function App() {
                       );
                   })}
 
+                  {/* Loading state — shown after user messages */}
+                  {isLoading && !planData && (
+                      <div className="flex justify-center items-center py-16">
+                          <div className="text-center">
+                              <div className="flex justify-center mb-4">
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '0ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '150ms' }} />
+                                  <div className="w-3 h-3 bg-stone-400 rounded-full animate-bounce mx-0.5" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <p className="text-sm font-medium text-stone-600">Planning your outfit...</p>
+                              <p className="text-xs text-stone-400 mt-1">Analyzing occasion and style options</p>
+                          </div>
+                      </div>
+                  )}
+
                   {/* Outfit recommendation card — single view with prev/next */}
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (() => {
                       const outfit = stylistOutfits[selectedOutfitIndex];
-                      const isLiked = selectedOutfitIndex !== null;
+                      const isLiked = likedOutfitIndex === selectedOutfitIndex;
                       const styleTitle = outfit.name.split(' ').slice(0, 5).join(' ');
                       return (
                           <div className="pt-1">
@@ -3265,10 +3319,14 @@ export default function App() {
                                       <ChevronLeft size={22} />
                                   </button>
                                   <button
-                                      onClick={() => setSelectedOutfitIndex(selectedOutfitIndex)}
-                                      className="px-6 py-3 rounded-full bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white font-bold text-sm flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
+                                      onClick={() => setLikedOutfitIndex(prev => prev === selectedOutfitIndex ? null : selectedOutfitIndex)}
+                                      className={`px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all ${
+                                          isLiked
+                                              ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
+                                              : 'bg-stone-100 border border-stone-200 text-stone-400 hover:bg-stone-200'
+                                      }`}
                                   >
-                                      <Heart size={16} className="fill-white" /> Liked
+                                      <Heart size={16} className={isLiked ? 'fill-white' : ''} /> {isLiked ? 'Liked' : 'Like'}
                                   </button>
                                   <button
                                       onClick={() => setSelectedOutfitIndex(prev => prev !== null && prev < stylistOutfits.length - 1 ? prev + 1 : 0)}
@@ -3356,13 +3414,21 @@ export default function App() {
                       </button>
                   )}
 
+                  {/* Search button — only enabled when user has liked an outfit */}
                   {stylistOutfits.length > 0 && selectedOutfitIndex !== null && (
                       <button
                           onClick={handleCard3Search}
-                          className="w-full mt-3 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
+                          disabled={likedOutfitIndex === null}
+                          className={`w-full mt-3 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
+                              likedOutfitIndex !== null
+                                  ? 'bg-gradient-to-r from-[#C67B88] to-[#B56A78] text-white shadow-md hover:shadow-lg'
+                                  : 'bg-stone-100 text-stone-400 cursor-not-allowed'
+                          }`}
                       >
                           <Search size={16} />
-                          Find Items for Option {String.fromCharCode(65 + selectedOutfitIndex)}
+                          {likedOutfitIndex !== null
+                              ? `Find Items for Option ${String.fromCharCode(65 + likedOutfitIndex)}`
+                              : 'Like an outfit to find items'}
                       </button>
                   )}
               </div>
@@ -3898,29 +3964,35 @@ export default function App() {
                       </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                      <div>
-                          <label className="text-xs font-medium text-stone-500 mb-1 block">Height</label>
+                  <div>
+                      <label className="text-xs font-medium text-stone-500 mb-1 block">Height</label>
+                      <div className="flex items-center gap-2">
                           <input 
-                              type="text"
-                              value={profile.height || ''}
-                              onChange={(e) => setProfile(p => ({...p, height: e.target.value}))}
-                              placeholder="e.g. 165 cm"
-                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
+                              type="number"
+                              value={profile.height ? profile.height.split("'")[0] : ''}
+                              onChange={(e) => {
+                                  const ft = e.target.value;
+                                  const currentIn = profile.height?.match(/'(\d+)"/)?.[1] || '0';
+                                  setProfile(p => ({...p, height: ft ? `${ft}'${currentIn}"` : ''}));
+                              }}
+                              placeholder="5"
+                              min="3" max="7"
+                              className="w-16 px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900 text-center"
                           />
-                      </div>
-                      <div>
-                          <label className="text-xs font-medium text-stone-500 mb-1 block">Height Category</label>
-                          <select 
-                              value={profile.heightCategory || ''}
-                              onChange={(e) => setProfile(p => ({...p, heightCategory: e.target.value}))}
-                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900"
-                          >
-                              <option value="">Select</option>
-                              <option value="Petite">Petite</option>
-                              <option value="Average">Average</option>
-                              <option value="Tall">Tall</option>
-                          </select>
+                          <span className="text-xs font-bold text-stone-400">ft</span>
+                          <input 
+                              type="number"
+                              value={profile.height?.match(/'(\d+)"/)?.[1] || ''}
+                              onChange={(e) => {
+                                  const inches = e.target.value;
+                                  const currentFt = profile.height?.split("'")[0] || '5';
+                                  setProfile(p => ({...p, height: `${currentFt}'${inches}"`}));
+                              }}
+                              placeholder="6"
+                              min="0" max="11"
+                              className="w-16 px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-stone-900 text-center"
+                          />
+                          <span className="text-xs font-bold text-stone-400">in</span>
                       </div>
                   </div>
 
@@ -3977,7 +4049,6 @@ export default function App() {
       const fields = [
           { label: 'Gender', value: profile.gender, key: 'gender', icon: <User size={16} /> },
           { label: 'Height', value: profile.height || 'Not set', key: 'height', icon: <Ruler size={16} /> },
-          { label: 'Height Category', value: profile.heightCategory || 'Not set', key: 'heightCategory', icon: <Ruler size={16} /> },
           { label: 'Clothing Size', value: profile.estimatedSize, key: 'estimatedSize', icon: <Layers size={16} /> },
           { label: 'Shoe Size', value: profile.shoeSize || 'Not set', key: 'shoeSize', icon: <Footprints size={16} /> },
       ];

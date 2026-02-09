@@ -80,17 +80,15 @@ export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<User
 
         **Your Tasks:**
         1. **Gender:** Detect the person's gender (Female / Male / Non-binary)
-        2. **Height Category:** Based on proportions, classify as: "Petite" (under 5'3" / 160cm), "Average" (5'3"-5'7" / 160-170cm), "Tall" (over 5'7" / 170cm)
-        3. **Estimated Height:** Give a specific estimate (e.g., "165 cm" or "5'5\"")
-        4. **Clothing Size:** Estimate standard clothing size: XS, S, M, L, XL, XXL
-        5. **Shoe Size:** Estimate shoe size based on height/proportions (e.g., "US 7", "US 9")
+        2. **Estimated Height:** Give a specific estimate in feet and inches format (e.g., "5'5\"", "5'10\"")
+        3. **Clothing Size:** Estimate standard clothing size: XS, S, M, L, XL, XXL
+        4. **Shoe Size:** Estimate shoe size based on height/proportions (e.g., "US 7", "US 9")
 
         **Output Schema (Strict JSON):**
         \`\`\`json
         {
           "gender": "Female" | "Male" | "Non-binary",
-          "heightCategory": "Average",
-          "height": "165 cm",
+          "height": "5'5\"",
           "estimatedSize": "M",
           "shoeSize": "US 7",
           "confidence": "high" | "medium" | "low"
@@ -126,7 +124,6 @@ export const analyzeProfilePhoto = async (dataUrl: string): Promise<Partial<User
 
         return {
             gender: parsed.gender || 'Female',
-            heightCategory: parsed.heightCategory || '',
             height: parsed.height || '',
             estimatedSize: parsed.estimatedSize || 'M',
             shoeSize: parsed.shoeSize || '',
@@ -275,7 +272,13 @@ ${chatHistory.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n')}
 4. **CRITICAL for includedItems:** Use the user's SPECIFIC words. If they say "skirt", put "skirt" not "bottoms". If they say "silk camisole", put "silk camisole". These are search terms.
 5. **CRITICAL for itemCategories:** Map each includedItem to its parent category for pipeline routing. "skirt" → "bottoms", "camisole" → "tops".
 6. For excludedMaterials: If user says "no polyester" or "I don't like nylon", add those.
-7. Be conversational and brief in your response.
+7. **CRITICAL: USER PREFERENCE PRIORITY for colors:**
+   - The user's explicitly stated color preferences ALWAYS take priority over AI-suggested colors.
+   - If user says "I like pink" or "I want pink", the colors array must have "Pink" as the FIRST color. Replace the AI-suggested colors that conflict or are least compatible, keeping colors that complement the user's choice.
+   - If user says "change to pink" or "make it pink", replace ALL existing colors with a pink-based palette (e.g., ["Pink", "Blush", "Rose Gold", "Cream"]).
+   - If user says "add pink" or "also pink", add pink as the FIRST color and keep existing colors that complement it.
+   - This same priority rule applies to styles, items, and all other preferences — user's explicit wishes always come first.
+8. Be conversational and brief in your response.
 
 **OUTPUT (Strict JSON):**
 \`\`\`json
@@ -597,7 +600,6 @@ ${styleGuideJson}
 - Gender: ${profile.gender}
 - Size: ${profile.estimatedSize}
 ${profile.height ? `- Height: ${profile.height}` : ''}
-${profile.heightCategory ? `- Build: ${profile.heightCategory}` : ''}
 - Current Outfit (Kept Items): ${keptItems}
 - Kept Item Structural Details: ${keptItemDetails}
 - Looking For: ${targetItems}
@@ -885,10 +887,15 @@ For each item above, generate a single optimized Google Shopping search query st
 **RULES:**
 1. Include gender (e.g. "women's"), color, material/fabric if relevant, and item type.
 2. Include a key feature or silhouette detail (e.g. "high-waisted", "oversized", "cropped").
-3. Keep it concise (6-12 words). Do NOT include brand names unless specified.
+3. Keep it concise (6-14 words). Do NOT include brand names unless specified.
 4. Add "buy online" at the end of each query.
-5. Do NOT include price or size in the query — SerpApi handles filters separately.
-6. Exclude: -pinterest -polyvore -lyst
+5. **BUDGET-AWARE QUERIES:** If the user has a budget, add a price hint to help SerpApi return affordable results.
+   - If total budget is under $200, add "affordable" or "under $XX" (per-item estimate = total budget / number of categories).
+   - If total budget is $200-$500, no price hint needed — mid-range results are default.
+   - If total budget is over $500, you may add "designer" or "premium" to get higher-quality results.
+   - Do NOT include the exact total budget — estimate a reasonable per-item price.
+6. Do NOT include size in the query — SerpApi handles size filters separately.
+7. Exclude: -pinterest -polyvore -lyst
 
 **OUTPUT FORMAT (Strict JSON):**
 {
@@ -897,11 +904,19 @@ For each item above, generate a single optimized Google Shopping search query st
   }
 }
 
-Example:
+Example (budget $100-$200 for 2 categories → ~$100 per item):
+{
+  "queries": {
+    "bottom": "women's black high-waisted wide-leg trousers under $100 buy online -pinterest -polyvore -lyst",
+    "footwear": "women's white chunky platform sneakers under $100 buy online -pinterest -polyvore -lyst"
+  }
+}
+
+Example (budget $500+ or unspecified):
 {
   "queries": {
     "bottom": "women's black high-waisted wide-leg trousers buy online -pinterest -polyvore -lyst",
-    "footwear": "women's white chunky platform sneakers buy online -pinterest -polyvore -lyst"
+    "footwear": "women's white designer chunky platform sneakers buy online -pinterest -polyvore -lyst"
   }
 }
 `;
@@ -998,6 +1013,58 @@ export const searchWithStylistQueries = async (
 
         const pipelineResults = await Promise.all(pipelinePromises);
 
+        // --- BUDGET TOTAL CHECK ---
+        // Parse user's budget range and verify the combined total across categories
+        const parseBudgetPrice = (p: string) => parseFloat((p || '').replace(/[^0-9.]/g, '')) || 0;
+        const budgetRangeStr = preferences.priceRange || '';
+        const budgetParts = budgetRangeStr.replace(/\$/g, '').split('-');
+        const budgetMin = parseFloat(budgetParts[0]) || 0;
+        const budgetMax = parseFloat(budgetParts[1] || budgetParts[0]) || 0;
+
+        if (budgetMax > 0) {
+            // Calculate the cheapest possible total (cheapest item from each category)
+            let cheapestTotal = 0;
+            const categoryCount = pipelineResults.filter(r => r.topItems.length > 0).length;
+
+            pipelineResults.forEach(res => {
+                if (res.topItems.length === 0) return;
+                const prices = res.topItems.map((item: any) => parseBudgetPrice(item.price)).filter((p: number) => p > 0);
+                if (prices.length > 0) {
+                    cheapestTotal += Math.min(...prices);
+                }
+            });
+
+            logMessages.push(`[BudgetCheck] User budget: $${budgetMin}-$${budgetMax} | Cheapest combo total: $${cheapestTotal.toFixed(2)} across ${categoryCount} categories`);
+
+            // If cheapest total exceeds budget, re-sort each category by price ascending
+            // so the most affordable items appear first
+            if (cheapestTotal > budgetMax * 1.1) { // 10% tolerance
+                logMessages.push(`[BudgetCheck] Over budget — re-sorting items by price (ascending) to prioritize affordable options`);
+                pipelineResults.forEach(res => {
+                    if (res.topItems.length > 1) {
+                        res.topItems.sort((a: any, b: any) => {
+                            const priceA = parseBudgetPrice(a.price);
+                            const priceB = parseBudgetPrice(b.price);
+                            // Items with no price go last
+                            if (priceA === 0 && priceB === 0) return 0;
+                            if (priceA === 0) return 1;
+                            if (priceB === 0) return -1;
+                            return priceA - priceB;
+                        });
+                    }
+                });
+            } else {
+                logMessages.push(`[BudgetCheck] Within budget — no re-sorting needed`);
+            }
+
+            // Per-category budget hint: if budget is specified and there are multiple categories,
+            // calculate a fair per-category budget and log it
+            if (categoryCount > 1) {
+                const perCategoryBudget = budgetMax / categoryCount;
+                logMessages.push(`[BudgetCheck] Suggested per-category budget: ~$${perCategoryBudget.toFixed(0)}`);
+            }
+        }
+
         // --- ASSEMBLE FINAL RESULTS ---
         const recommendations: RecommendationItem[] = [];
 
@@ -1011,8 +1078,8 @@ export const searchWithStylistQueries = async (
                     components: res.topItems.map((item: any) => ({
                         category: res.category,
                         name: item.name,
-                        brand: item.source || "Unknown",
-                        price: item.price,
+                        brand: item.brand || item.source || "Unknown",
+                        price: item.price || "Check Site",
                         purchaseUrl: item.purchaseUrl,
                         validationNote: `Verified ✓`,
                         fallbackSearchUrl: item.fallbackSearchUrl,
@@ -1313,11 +1380,12 @@ export const searchAndRecommendCard1 = async (
                 components: res.topItems.map((item: any) => ({
                     category: res.category,
                     name: item.name,
-                    brand: item.source || "Unknown",
-                    price: item.price,
+                    brand: item.brand || item.source || "Unknown",
+                    price: item.price || "Check Site",
                     purchaseUrl: item.purchaseUrl,
                     validationNote: `Score: ${item.visualMatchScore}`,
-                    fallbackSearchUrl: item.fallbackSearchUrl
+                    fallbackSearchUrl: item.fallbackSearchUrl,
+                    imageUrl: item.image || undefined
                 }))
             });
         }
