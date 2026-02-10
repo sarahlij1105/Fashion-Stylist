@@ -3540,11 +3540,11 @@ export default function App() {
       }
   };
 
-  const handleCard3Search = async () => {
+  const handleCard3Search = async (skipBudgetCheck = false) => {
       if (likedOutfitIndex === null || !stylistOutfits[likedOutfitIndex]) return;
 
-      // If no budget has been set, prompt the user first
-      if (!preferences.priceRange) {
+      // If no budget has been set, prompt the user first (skip when called from budget confirm/skip)
+      if (!skipBudgetCheck && !preferences.priceRange) {
           setShowBudgetPrompt(true);
           return;
       }
@@ -3642,9 +3642,9 @@ export default function App() {
       };
       setChatMessages(prev => [...prev, budgetMsg]);
 
-      // Trigger search after state update (use setTimeout to ensure state is committed)
+      // Trigger search immediately — skip budget check since we just set it
       setTimeout(() => {
-          handleCard3Search();
+          handleCard3Search(true);
       }, 50);
   };
 
@@ -4596,7 +4596,7 @@ export default function App() {
                                       setBudgetInput({ min: '', max: '' });
                                       const skipMsg: RefinementChatMessage = { role: 'user', content: "No specific budget — find me the best options!" };
                                       setChatMessages(prev => [...prev, skipMsg]);
-                                      setTimeout(() => handleCard3Search(), 50);
+                                      setTimeout(() => handleCard3Search(true), 50);
                                   }}
                                   className="px-3 py-2 rounded-lg font-bold text-xs border border-rose-200 text-stone-500 hover:bg-rose-50 transition-all"
                               >
