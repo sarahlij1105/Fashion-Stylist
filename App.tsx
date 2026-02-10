@@ -4609,7 +4609,7 @@ export default function App() {
                   {/* Search button — only enabled when user has liked an outfit */}
                   {stylistOutfits.length > 0 && !showBudgetPrompt && (
                       <button
-                          onClick={handleCard3Search}
+                          onClick={() => handleCard3Search()}
                           disabled={likedOutfitIndex === null}
                           className={`w-full mt-3 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all ${
                               likedOutfitIndex !== null
